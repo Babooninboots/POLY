@@ -9,6 +9,8 @@ Output: LAMMPS atomic data file + companion dump file with grain_id and
 Euler angles (as specified in SPEC.md Module 6).
 """
 
+import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 
 import numpy as np
@@ -55,6 +57,71 @@ def _get_mass(symbol: str) -> float:
         return float(atomic_masses[z])
     except Exception:
         return _ATOMIC_MASSES.get(symbol, 1.0)
+
+
+# ---------------------------------------------------------------------------
+# Per-grain worker (module-level so it's pickleable)
+# ---------------------------------------------------------------------------
+
+
+def _process_standard_grain(args: tuple) -> tuple[np.ndarray, np.ndarray, int, np.ndarray, int]:
+    """Process one grain in the standard assembly pipeline.
+
+    All inputs are read-only; cKDTree.query releases the GIL so this is
+    safe to call concurrently from multiple threads (use ``workers=1``
+    on each query to avoid nested thread pools).
+
+    Parameters
+    ----------
+    args : tuple
+        (g, crystal_positions, crystal_types, pre_crop_radius,
+         rotation_matrix, best_seed, best_seed_index,
+         seed_tree, radii_all, n_seeds, n_img, euler)
+
+    Returns
+    -------
+    pos : (n_keep, 3) ndarray
+    typ : (n_keep,) ndarray
+    gid : int
+    euler_arr : (n_keep, 3) ndarray
+    n_keep : int
+    """
+    (g, crystal_positions, crystal_types, pre_crop_radius,
+     rotation_matrix, best_seed, best_seed_index,
+     seed_tree, radii_all, n_seeds, n_img, euler) = args
+
+    dists_from_origin = np.linalg.norm(crystal_positions, axis=1)
+    crop_mask = dists_from_origin <= pre_crop_radius
+    n_crop = int(crop_mask.sum())
+    if n_crop == 0:
+        return (np.empty((0, 3)), np.empty(0, dtype=int),
+                g, np.empty((0, 3)), 0)
+
+    R = Rotation.from_matrix(rotation_matrix)
+    pos_crop = R.apply(crystal_positions[crop_mask]) + best_seed
+    typ_crop = crystal_types[crop_mask]
+
+    if radii_all is not None:
+        k_kd = min(30, n_seeds)
+        kd_dists, kd_indices = seed_tree.query(
+            pos_crop, k=k_kd, workers=1,
+        )
+        r_k = radii_all[kd_indices]
+        power_dists = kd_dists ** 2 - r_k ** 2
+        best_k = np.argmin(power_dists, axis=1)
+        closest = kd_indices[np.arange(n_crop), best_k]
+    else:
+        _, closest = seed_tree.query(pos_crop, k=1, workers=1)
+        closest = (closest.ravel() if closest.ndim > 1 else closest)
+
+    keep_mask = closest == best_seed_index
+    n_keep = int(keep_mask.sum())
+    if n_keep == 0:
+        return (np.empty((0, 3)), np.empty(0, dtype=int),
+                g, np.empty((0, 3)), 0)
+
+    return (pos_crop[keep_mask], typ_crop[keep_mask],
+            g, np.tile(euler, (n_keep, 1)), n_keep)
 
 
 # ---------------------------------------------------------------------------
@@ -217,8 +284,15 @@ class PolycrystalAssembly:
         n_seeds = len(seeds_flat)
         seed_tree = cKDTree(seeds_flat)
 
+        # Use parallel KD-tree queries when average pre-crop exceeds 5k atoms
+        _est_pre_crop = self._n_atoms_per_copy / max(self.n_grains, 1)
+        _num_workers = -1 if _est_pre_crop > 5000 else 1
+
         if verbose:
             print(f"  Seed images:      {n_seeds} ({self.n_grains} x 27)")
+            if _num_workers == -1:
+                print(f"  KD-tree workers:  all cores "
+                      f"(est. {_est_pre_crop:.0f} pre-crop atoms/grain > 5000)")
 
         # ----------------------------------------------------------------
         # Step 2: Select best periodic image per grain.
@@ -351,13 +425,17 @@ class PolycrystalAssembly:
                 # KD-tree query
                 if radii_all is not None:
                     k_kd = min(30, n_seeds)
-                    kd_dists, kd_indices = seed_tree.query(pos_crop, k=k_kd)
+                    kd_dists, kd_indices = seed_tree.query(
+                        pos_crop, k=k_kd, workers=_num_workers,
+                    )
                     r_k = radii_all[kd_indices]
                     power_dists = kd_dists ** 2 - r_k ** 2
                     best_k = np.argmin(power_dists, axis=1)
                     closest = kd_indices[np.arange(n_crop), best_k]
                 else:
-                    _, closest = seed_tree.query(pos_crop, k=1)
+                    _, closest = seed_tree.query(
+                        pos_crop, k=1, workers=_num_workers,
+                    )
                     closest = (closest.ravel() if closest.ndim > 1
                                else closest)
 
@@ -402,59 +480,131 @@ class PolycrystalAssembly:
                     f"({'grain diagonals' if self.grain_diagonals is not None else 'box diagonal fallback'})"
                 )
 
-            for g in range(self.n_grains):
-                dists_from_origin = np.linalg.norm(
-                    self._crystal_positions, axis=1,
-                )
-                crop_mask = dists_from_origin <= pre_crop_radii[g]
-                n_crop = int(crop_mask.sum())
-                if n_crop == 0:
-                    if verbose:
-                        print(
-                            f"  Grain {g + 1}/{self.n_grains}: "
-                            f"0 atoms (empty pre-crop)"
-                        )
-                    continue
+            # Decide serial vs. threaded: skip threading for tiny jobs
+            # where thread-pool overhead would dominate.
+            _use_threads = (
+                self.n_grains >= 8
+                and _est_pre_crop >= 500
+            )
 
-                R = Rotation.from_matrix(rotation_matrices[g])
-                pos_crop = (
-                    R.apply(self._crystal_positions[crop_mask])
-                    + best_seeds[g]
-                )
-                typ_crop = self._crystal_types[crop_mask]
+            if _use_threads:
+                import time as _time
+                _t0 = _time.perf_counter()
 
-                if radii_all is not None:
-                    k_kd = min(30, n_seeds)
-                    kd_dists, kd_indices = seed_tree.query(pos_crop, k=k_kd)
-                    r_k = radii_all[kd_indices]
-                    power_dists = kd_dists ** 2 - r_k ** 2
-                    best_k = np.argmin(power_dists, axis=1)
-                    closest = kd_indices[np.arange(n_crop), best_k]
-                else:
-                    _, closest = seed_tree.query(pos_crop, k=1)
-                    closest = (closest.ravel() if closest.ndim > 1
-                               else closest)
+                _tasks = [
+                    (g,
+                     self._crystal_positions,
+                     self._crystal_types,
+                     float(pre_crop_radii[g]),
+                     rotation_matrices[g],
+                     best_seeds[g],
+                     best_seed_indices[g],
+                     seed_tree,
+                     radii_all,
+                     n_seeds,
+                     n_img,
+                     euler_grain[g],
+                    )
+                    for g in range(self.n_grains)
+                ]
 
-                keep_mask = closest == best_seed_indices[g]
-                n_keep = int(keep_mask.sum())
-                if n_keep == 0:
-                    if verbose:
-                        print(
-                            f"  Grain {g + 1}/{self.n_grains}: "
-                            f"0 atoms kept"
-                        )
-                    continue
-
-                all_pos.append(pos_crop[keep_mask])
-                all_typ.append(typ_crop[keep_mask])
-                all_gid.append(np.full(n_keep, g, dtype=int))
-                all_eul.append(np.tile(euler_grain[g], (n_keep, 1)))
+                _n_threads = min(os.cpu_count() or 4, self.n_grains, 8)
+                _n_empty = 0
+                _n_kept = 0
 
                 if verbose:
                     print(
-                        f"  Grain {g + 1}/{self.n_grains}: "
-                        f"{n_keep:,} atoms kept"
+                        f"  Parallel grains:  {_n_threads} threads "
+                        f"({self.n_grains} tasks)"
                     )
+
+                with ThreadPoolExecutor(max_workers=_n_threads) as _ex:
+                    _futures = [_ex.submit(_process_standard_grain, _t) for _t in _tasks]
+                    _results_by_grain: list[tuple] = [None] * self.n_grains
+                    _done = 0
+                    for _future in as_completed(_futures):
+                        _r = _future.result()
+                        _g = _r[2]  # grain index
+                        _results_by_grain[_g] = _r
+                        _done += 1
+                        if verbose:
+                            _label = f"{'empty' if _r[4] == 0 else f'{_r[4]:,} atoms'}"
+                            print(f"  Grain {_g + 1}/{self.n_grains}: "
+                                  f"{_label}  ({_done}/{self.n_grains} done)")
+
+                for _r in _results_by_grain:
+                    if _r is None or _r[4] == 0:
+                        _n_empty += 1
+                        continue
+                    all_pos.append(_r[0])
+                    all_typ.append(_r[1])
+                    all_gid.append(np.full(_r[4], _r[2], dtype=int))
+                    all_eul.append(_r[3])
+                    _n_kept += _r[4]
+
+                if verbose:
+                    _dt = _time.perf_counter() - _t0
+                    print(f"  Threaded done:    {_n_kept:,} atoms, "
+                          f"{_n_empty} empty  ({_dt:.1f}s)")
+
+            else:
+                for g in range(self.n_grains):
+                    dists_from_origin = np.linalg.norm(
+                        self._crystal_positions, axis=1,
+                    )
+                    crop_mask = dists_from_origin <= pre_crop_radii[g]
+                    n_crop = int(crop_mask.sum())
+                    if n_crop == 0:
+                        if verbose:
+                            print(
+                                f"  Grain {g + 1}/{self.n_grains}: "
+                                f"0 atoms (empty pre-crop)"
+                            )
+                        continue
+
+                    R = Rotation.from_matrix(rotation_matrices[g])
+                    pos_crop = (
+                        R.apply(self._crystal_positions[crop_mask])
+                        + best_seeds[g]
+                    )
+                    typ_crop = self._crystal_types[crop_mask]
+
+                    if radii_all is not None:
+                        k_kd = min(30, n_seeds)
+                        kd_dists, kd_indices = seed_tree.query(
+                            pos_crop, k=k_kd, workers=_num_workers,
+                        )
+                        r_k = radii_all[kd_indices]
+                        power_dists = kd_dists ** 2 - r_k ** 2
+                        best_k = np.argmin(power_dists, axis=1)
+                        closest = kd_indices[np.arange(n_crop), best_k]
+                    else:
+                        _, closest = seed_tree.query(
+                            pos_crop, k=1, workers=_num_workers,
+                        )
+                        closest = (closest.ravel() if closest.ndim > 1
+                                   else closest)
+
+                    keep_mask = closest == best_seed_indices[g]
+                    n_keep = int(keep_mask.sum())
+                    if n_keep == 0:
+                        if verbose:
+                            print(
+                                f"  Grain {g + 1}/{self.n_grains}: "
+                                f"0 atoms kept"
+                            )
+                        continue
+
+                    all_pos.append(pos_crop[keep_mask])
+                    all_typ.append(typ_crop[keep_mask])
+                    all_gid.append(np.full(n_keep, g, dtype=int))
+                    all_eul.append(np.tile(euler_grain[g], (n_keep, 1)))
+
+                    if verbose:
+                        print(
+                            f"  Grain {g + 1}/{self.n_grains}: "
+                            f"{n_keep:,} atoms kept"
+                        )
 
         if not all_pos:
             if verbose:
@@ -535,14 +685,21 @@ class PolycrystalAssembly:
         types: np.ndarray,
         start_id: int = 1,
     ) -> str:
-        lines = ["Atoms\n"]
-        for j in range(len(positions)):
-            aid = start_id + j
-            t = types[j]
-            x, y, z = positions[j]
-            lines.append(f"  {aid} {t} {x:.8f} {y:.8f} {z:.8f}")
-        lines.append("")
-        return "\n".join(lines) + "\n"
+        """Build the ``Atoms`` section as a single string.
+
+        Uses ``numpy.savetxt`` to an in-memory buffer so formatting
+        runs in C rather than a Python ``for`` loop.
+        """
+        import io
+
+        n = len(positions)
+        ids = np.arange(start_id, start_id + n, dtype=int)
+        buf = io.StringIO()
+        buf.write("Atoms\n")
+        np.savetxt(buf, np.column_stack([ids, types, positions]),
+                   fmt=["%d", "%d", "%.8f", "%.8f", "%.8f"])
+        buf.write("\n")
+        return buf.getvalue()
 
     def write_lammps_data(self, filepath: str) -> None:
         """Write the assembled structure as a LAMMPS atomic data file."""
@@ -574,12 +731,25 @@ class PolycrystalAssembly:
         if self._positions is None:
             raise RuntimeError("No assembly data; call assemble() first.")
 
+        import io
+
         xlo, ylo, zlo = self.box_start
         xhi, yhi, zhi = self.box_end
+        n = self._n_total
+        ids = np.arange(1, n + 1, dtype=int)
+        gids = self._grain_ids + 1  # 1-based grain id
+
+        # Build atom lines vectorised — ~50× faster than per-atom f-strings.
+        atoms_buf = io.StringIO()
+        np.savetxt(atoms_buf,
+                   np.column_stack([ids, self._types, self._positions,
+                                    gids, self._euler_per_atom]),
+                   fmt=["%d", "%d", "%.8f", "%.8f", "%.8f",
+                        "%d", "%.6f", "%.6f", "%.6f"])
 
         with open(filepath, "w") as fh:
             fh.write("ITEM: TIMESTEP\n0\n")
-            fh.write(f"ITEM: NUMBER OF ATOMS\n{self._n_total}\n")
+            fh.write(f"ITEM: NUMBER OF ATOMS\n{n}\n")
             fh.write("ITEM: BOX BOUNDS pp pp pp\n")
             fh.write(f"{xlo:.8f} {xhi:.8f}\n")
             fh.write(f"{ylo:.8f} {yhi:.8f}\n")
@@ -588,17 +758,7 @@ class PolycrystalAssembly:
                 "ITEM: ATOMS id type x y z grain_id "
                 "euler_angle_1 euler_angle_2 euler_angle_3\n"
             )
-
-            for j in range(self._n_total):
-                aid = j + 1
-                t = self._types[j]
-                x, y, z = self._positions[j]
-                gid = self._grain_ids[j] + 1  # 1-based grain id
-                e1, e2, e3 = self._euler_per_atom[j]
-                fh.write(
-                    f"{aid} {t} {x:.8f} {y:.8f} {z:.8f} "
-                    f"{gid} {e1:.6f} {e2:.6f} {e3:.6f}\n"
-                )
+            fh.write(atoms_buf.getvalue())
 
     # ------------------------------------------------------------------
     # Main pipeline
@@ -637,15 +797,32 @@ class PolycrystalAssembly:
         self._euler_per_atom = euler_per_atom
         self._n_total = len(positions)
 
-        if data_path is not None:
-            self.write_lammps_data(data_path)
-            if verbose:
-                print(f"  LAMMPS data file -> {data_path}")
+        if data_path is not None or dump_path is not None:
+            _tasks = []
+            if data_path is not None:
+                _tasks.append((self.write_lammps_data, data_path, "data"))
+            if dump_path is not None:
+                _tasks.append((self.write_lammps_dump, dump_path, "dump"))
 
-        if dump_path is not None:
-            self.write_lammps_dump(dump_path)
-            if verbose:
-                print(f"  LAMMPS dump file -> {dump_path}")
+            if len(_tasks) == 1:
+                _fn, _p, _label = _tasks[0]
+                _fn(_p)
+                if verbose:
+                    print(f"  LAMMPS {_label} file -> {_p}")
+            else:
+                with ThreadPoolExecutor(max_workers=2) as _ex:
+                    _futures = {
+                        _ex.submit(_fn, _p): _label
+                        for _fn, _p, _label in _tasks
+                    }
+                    _printed = False
+                    for _f in as_completed(_futures):
+                        _label = _futures[_f]
+                        _f.result()  # re-raise on error
+                        if verbose and not _printed:
+                            _printed = True
+                            print(f"  LAMMPS data file -> {data_path}\n"
+                                  f"  LAMMPS dump file -> {dump_path}")
 
         return AssemblyResult(
             positions=positions,
