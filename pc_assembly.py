@@ -726,7 +726,7 @@ class PolycrystalAssembly:
         """Write a LAMMPS dump file with grain_id and Euler angles.
 
         Format:
-          ITEM: ATOMS id type x y z grain_id euler_angle_1 euler_angle_2 euler_angle_3
+          ITEM: ATOMS id_POLY type x y z grain_id euler_angle_1 euler_angle_2 euler_angle_3
         """
         if self._positions is None:
             raise RuntimeError("No assembly data; call assemble() first.")
@@ -755,7 +755,7 @@ class PolycrystalAssembly:
             fh.write(f"{ylo:.8f} {yhi:.8f}\n")
             fh.write(f"{zlo:.8f} {zhi:.8f}\n")
             fh.write(
-                "ITEM: ATOMS id type x y z grain_id "
+                "ITEM: ATOMS id_POLY type x y z grain_id "
                 "euler_angle_1 euler_angle_2 euler_angle_3\n"
             )
             fh.write(atoms_buf.getvalue())
