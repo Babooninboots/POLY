@@ -1,8 +1,8 @@
 """
 POLY — Interactive GUI for LAMMPS Polycrystalline Generator.
 
-Phase 2: 3D viewports with pyvistaqt, placeholder renders,
-and coloured chart placeholder.
+Author: Yang Zhang (张杨)
+Affiliation: Stony Brook University (SUNY at Stony Brook)
 
 Run:
     python gui_main.py
@@ -1444,22 +1444,31 @@ def main() -> None:
     app.setOrganizationName("POLY-Project")
 
     # Programmatic splash pixmap — no external image file needed
-    splash_pm = QPixmap(480, 240)
+    splash_pm = QPixmap(480, 260)
     splash_pm.fill(QColor("#1a1a2e"))
     painter = QPainter(splash_pm)
     painter.setPen(QColor("#e0e0e0"))
     title_font = QFont("Segoe UI", 28, QFont.Bold)
     painter.setFont(title_font)
-    painter.drawText(splash_pm.rect().adjusted(0, 20, 0, 0),
+    painter.drawText(splash_pm.rect().adjusted(0, 10, 0, 0),
                      Qt.AlignHCenter | Qt.AlignTop, "POLY")
     sub_font = QFont("Segoe UI", 12)
     painter.setFont(sub_font)
     painter.setPen(QColor("#90a4ae"))
-    painter.drawText(splash_pm.rect().adjusted(0, 75, 0, 0),
+    painter.drawText(splash_pm.rect().adjusted(0, 65, 0, 0),
                      Qt.AlignHCenter | Qt.AlignTop,
                      "Polycrystalline LAMMPS Generator")
+    painter.setPen(QColor("#78909c"))
+    author_font = QFont("Segoe UI", 11)
+    painter.setFont(author_font)
+    painter.drawText(splash_pm.rect().adjusted(0, 110, 0, 0),
+                     Qt.AlignHCenter | Qt.AlignTop,
+                     "Author: Yang Zhang (张杨)")
+    painter.drawText(splash_pm.rect().adjusted(0, 132, 0, 0),
+                     Qt.AlignHCenter | Qt.AlignTop,
+                     "Stony Brook University")
     painter.setPen(QColor("#546e7a"))
-    painter.drawText(splash_pm.rect().adjusted(0, 180, 0, 0),
+    painter.drawText(splash_pm.rect().adjusted(0, 195, 0, 0),
                      Qt.AlignHCenter | Qt.AlignBottom,
                      "Starting…")
     painter.end()
