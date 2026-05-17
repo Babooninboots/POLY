@@ -305,7 +305,7 @@ def test_write_lammps_dump():
         assert "ITEM: NUMBER OF ATOMS" in content
         assert f"{len(pos)}" in content
         assert "ITEM: BOX BOUNDS pp pp pp" in content
-        assert "ITEM: ATOMS id type x y z grain_id euler_angle_1 euler_angle_2 euler_angle_3" in content
+        assert "ITEM: ATOMS id_POLY type x y z grain_id euler_angle_1 euler_angle_2 euler_angle_3" in content
         # Verify grain IDs are 1-based
         for line in content.split("\n")[-10:-1]:
             if line.strip() and line[0].isdigit():

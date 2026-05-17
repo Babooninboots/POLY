@@ -23,7 +23,7 @@ build. All backend modules can also be used headless via Python scripts.
 | **Box Size**                | Start `(x0, y0, z0)` and end `(x1, y1, z1)`, auto-tuned for columnar/Z-aligned modes          |
 | **Boundary Conditions**     | Periodic (PBC) along all three axes                                                           |
 | **Grain Quantity**          | Fixed count OR average grain diameter                                                         |
-| **Grain Size Distribution** | `random`, `normal`, `customized`, `laminate`, `even`                                          |
+| **Grain Size Distribution** | `random`, `normal`, `bimodal`, `customized`, `laminate`, `even`                               |
 | **Crystal Structure**       | Bravais, Intermetallics, Spacegroup, or Custom (`.cif` / `.crystal`)                          |
 | **Orientation**             | `random`, `z_alignment`, `low_angle`, `high_angle`, `custom_misorientation`, `custom_profile` |
 | **Output**                  | LAMMPS data file (`.data`) + dump file (`.dump`)                                              |
@@ -40,6 +40,10 @@ individual grains.
 1. **Seed Initialization**
    
    - *Random* / *Normal*: Place seeds uniformly, then enforce minimum separation.
+   - *Bimodal*: Gaussian mixture model with user-specified number fraction φ,
+     mode 1 mean/std (μ₁, σ₁), and mode 2 mean/std (μ₂, σ₂).  Total grain count
+     is computed automatically from the box volume and weighted-average grain
+     volume.  Diameters are drawn from φ·N(μ₁,σ₁) + (1−φ)·N(μ₂,σ₂).
    - *Laminate*: Seeds on a mid-plane with in-plane random or normal distribution.
    - *Evenly Spaced (1D)*: Seeds at equal intervals along one axis.
    - *Customized*: Read seed positions from a `.seed` file (3-col `x y z` or
@@ -51,10 +55,12 @@ individual grains.
    standard Voronoi.
 
 3. **Size Distribution Optimization (FBSP)**
-   For `normal` distribution (and `laminate` + normal in-plane): Force-Biased
-   Sphere Packing — a Monte Carlo relaxation that draws target diameters from a
-   log-normal distribution and applies overlap-based repulsive forces with
-   learning-rate decay. Runs up to 2000 iterations.
+   For `normal` and `bimodal` distributions (and `laminate` + normal in-plane):
+   Force-Biased Sphere Packing — a Monte Carlo relaxation that draws target
+   diameters (from a log-normal for normal, or a Gaussian mixture for bimodal)
+   and applies overlap-based repulsive forces with learning-rate decay.
+   For bimodal, final grain diameters are taken directly from the FBSP target
+   radii to preserve the bimodal signal. Runs up to 2000 iterations.
 
 4. **Output**
    Returns a `SeedResult` dataclass: `seeds`, `diameters`, `target_radii` (for

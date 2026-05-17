@@ -81,6 +81,76 @@ def _cpk_color(symbol: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Element → most-common solid-state crystal structure + lattice parameters
+# ---------------------------------------------------------------------------
+
+_ELEM_STRUCTURE: dict[str, tuple[str, float, float]] = {
+    # fcc
+    "Al": ("fcc", 4.0495, 4.0495),
+    "Cu": ("fcc", 3.6149, 3.6149),
+    "Ag": ("fcc", 4.0853, 4.0853),
+    "Au": ("fcc", 4.0782, 4.0782),
+    "Ni": ("fcc", 3.5238, 3.5238),
+    "Pt": ("fcc", 3.9242, 3.9242),
+    "Pd": ("fcc", 3.8907, 3.8907),
+    "Pb": ("fcc", 4.9502, 4.9502),
+    "Rh": ("fcc", 3.8044, 3.8044),
+    "Ir": ("fcc", 3.8394, 3.8394),
+    "Ca": ("fcc", 5.5884, 5.5884),
+    "Sr": ("fcc", 6.0849, 6.0849),
+    "Th": ("fcc", 5.0842, 5.0842),
+    "Ce": ("fcc", 5.1610, 5.1610),
+    "Yb": ("fcc", 5.4848, 5.4848),
+    "Ac": ("fcc", 5.3110, 5.3110),
+    # bcc
+    "Fe": ("bcc", 2.8665, 2.8665),
+    "Cr": ("bcc", 2.8846, 2.8846),
+    "Mo": ("bcc", 3.1472, 3.1472),
+    "W":  ("bcc", 3.1652, 3.1652),
+    "V":  ("bcc", 3.0270, 3.0270),
+    "Nb": ("bcc", 3.3004, 3.3004),
+    "Ta": ("bcc", 3.3013, 3.3013),
+    "K":  ("bcc", 5.3210, 5.3210),
+    "Na": ("bcc", 4.2906, 4.2906),
+    "Li": ("bcc", 3.5093, 3.5093),
+    "Rb": ("bcc", 5.5850, 5.5850),
+    "Cs": ("bcc", 6.1410, 6.1410),
+    "Ba": ("bcc", 5.0230, 5.0230),
+    "Eu": ("bcc", 4.5827, 4.5827),
+    # hcp
+    "Mg": ("hcp", 3.2094, 5.2108),
+    "Ti": ("hcp", 2.9506, 4.6826),
+    "Zn": ("hcp", 2.6649, 4.9468),
+    "Zr": ("hcp", 3.2316, 5.1477),
+    "Cd": ("hcp", 2.9788, 5.6167),
+    "Hf": ("hcp", 3.1946, 5.0511),
+    "Re": ("hcp", 2.7608, 4.4582),
+    "Ru": ("hcp", 2.7058, 4.2816),
+    "Os": ("hcp", 2.7352, 4.3190),
+    "Co": ("hcp", 2.5071, 4.0695),
+    "Be": ("hcp", 2.2858, 3.5843),
+    "Sc": ("hcp", 3.3088, 5.2680),
+    "Y":  ("hcp", 3.6474, 5.7306),
+    "Lu": ("hcp", 3.5052, 5.5494),
+    "Gd": ("hcp", 3.6336, 5.7810),
+    "Tb": ("hcp", 3.6055, 5.6966),
+    "Dy": ("hcp", 3.5915, 5.6501),
+    "Ho": ("hcp", 3.5778, 5.6178),
+    "Er": ("hcp", 3.5592, 5.5850),
+    "Tm": ("hcp", 3.5375, 5.5540),
+    # diamond
+    "C":  ("diamond", 3.5670, 3.5670),
+    "Si": ("diamond", 5.4309, 5.4309),
+    "Ge": ("diamond", 5.6579, 5.6579),
+    # bct (body-centred tetragonal)
+    "In": ("bct", 3.2517, 4.9459),
+    "Sn": ("bct", 5.8316, 3.1813),
+    # simple cubic
+    "Po": ("sc", 3.3450, 3.3450),
+}
+
+
+# ---------------------------------------------------------------------------
 # Main Window
 # ---------------------------------------------------------------------------
 
@@ -129,6 +199,7 @@ class MainWindow(QMainWindow):
         dock.crystal_combo.currentIndexChanged.connect(self._auto_tune_dimensions)
         dock.crystal_type_combo.currentTextChanged.connect(self._auto_tune_dimensions)
         dock.crystal_elem_edit.textChanged.connect(self._auto_tune_dimensions)
+        dock.crystal_elem_edit.textChanged.connect(self._on_crystal_element_changed)
         dock.crystal_shared_a.valueChanged.connect(self._auto_tune_dimensions)
         dock.crystal_shared_c.valueChanged.connect(self._auto_tune_dimensions)
         dock.crystal_sg_elements.textChanged.connect(self._auto_tune_dimensions)
@@ -138,6 +209,15 @@ class MainWindow(QMainWindow):
         dock.ori_csl_spin.valueChanged.connect(self._update_csl_angle)
         dock.ori_hkl_edit.textChanged.connect(self._update_csl_angle)
         dock.ori_csl_angle_combo.currentIndexChanged.connect(self._auto_tune_dimensions)
+        # Wire editor field changes → enable Apply Edit button
+        for _sb in (dock.edit_x, dock.edit_y, dock.edit_z,
+                    dock.edit_alpha, dock.edit_beta, dock.edit_gamma,
+                    dock.edit_grain_radius):
+            _sb.valueChanged.connect(self._on_editor_field_changed)
+        # Bimodal param changes → auto-recalculate grain count
+        for _sb2 in (dock.dist_bim_frac, dock.dist_bim_m1, dock.dist_bim_s1,
+                     dock.dist_bim_m2, dock.dist_bim_s2):
+            _sb2.valueChanged.connect(self._on_bimodal_params_changed)
         self._laminate_z_tune_lock = False
         self._update_csl_angle()
         self._seed_worker: SeedGenerationWorker | None = None
@@ -157,6 +237,9 @@ class MainWindow(QMainWindow):
         # crystal parameters (stored for build step)
         self._crystal_source: int = 0
         self._crystal_params: dict = {}
+        # grain editor edit cache
+        self._edit_cache: dict[int, dict[str, float]] = {}
+        self._current_grain_id: int = -1
         self.central.save_clicked.connect(self._on_save)
         self.central.save_state_clicked.connect(self._on_save_seed_state)
         self.central.build_clicked.connect(self._on_build)
@@ -195,7 +278,7 @@ class MainWindow(QMainWindow):
             avg_diameter = dock.qty_diam_spin.value()
 
         # --- distribution ---
-        dist_map = {0: "random", 1: "normal", 2: "customized", 3: "laminate", 4: "even"}
+        dist_map = {0: "random", 1: "normal", 2: "customized", 3: "laminate", 4: "even", 5: "bimodal"}
         distribution = dist_map[dock.dist_combo.currentIndex()]
         std_dev = dock.dist_stddev.value() if distribution in ("normal", "laminate") else None
         seed_file = (
@@ -203,6 +286,29 @@ class MainWindow(QMainWindow):
             if distribution == "customized"
             else None
         )
+        # Bimodal params
+        bimodal_params = None
+        if distribution == "bimodal":
+            box_vol = float(
+                (box_end[0] - box_start[0])
+                * (box_end[1] - box_start[1])
+                * (box_end[2] - box_start[2])
+            )
+            frac = dock.dist_bim_frac.value()
+            m1, s1 = dock.dist_bim_m1.value(), dock.dist_bim_s1.value()
+            m2, s2 = dock.dist_bim_m2.value(), dock.dist_bim_s2.value()
+            avg_vol = (frac * (np.pi / 6) * m1 ** 3
+                       + (1 - frac) * (np.pi / 6) * m2 ** 3)
+            n_grains = max(1, int(np.round(box_vol * 0.58 / avg_vol)))
+            dock.qty_spin.blockSignals(True)
+            dock.qty_spin.setValue(n_grains)
+            dock.qty_spin.blockSignals(False)
+            dock.qty_diam_spin.blockSignals(True)
+            dock.qty_diam_spin.setValue(round(
+                2.0 * (3.0 * box_vol / (4.0 * np.pi * n_grains)) ** (1.0 / 3.0), 4
+            ))
+            dock.qty_diam_spin.blockSignals(False)
+            bimodal_params = (frac, m1, s1, m2, s2)
 
         # --- crystal source & params (needed early for laminate d_hkl) ---
         crystal_source = dock.crystal_combo.currentIndex()
@@ -283,6 +389,7 @@ class MainWindow(QMainWindow):
             "seed_positions_file": seed_file,
             "laminate_in_plane_dist": laminate_in_plane_dist,
             "laminate_direction": laminate_direction,
+            "bimodal_params": bimodal_params,
         }
         current_ori_params = {
             "orientation_mode": orientation_mode, "hkl": hkl,
@@ -345,6 +452,7 @@ class MainWindow(QMainWindow):
                 csl_angle_deg=csl_angle_deg,
                 laminate_in_plane_dist=laminate_in_plane_dist,
                 laminate_direction=laminate_direction,
+                bimodal_params=bimodal_params,
                 run_seeds=run_seeds,
                 run_ori=run_ori,
                 cached_seed_result=self._seed_result,
@@ -469,8 +577,9 @@ class MainWindow(QMainWindow):
         Returns
         -------
         size_target : dict or None
-            ``{'mean': float, 'std': float}`` when a normal grain-size
-            distribution was requested, else ``None``.
+            ``{'type': 'normal', 'mean': float, 'std': float}`` for normal,
+            ``{'type': 'bimodal', 'frac': f, 'm1': m1, 's1': s1, 'm2': m2, 's2': s2}``
+            for bimodal, else ``None``.
         miso_target : ndarray or None
             Target misorientation angles loaded from the custom-misorientation
             file, if that mode was used.
@@ -489,7 +598,13 @@ class MainWindow(QMainWindow):
                 box_vol = float(np.prod(box_size))
                 n = sp["n_grains"]
                 mean = 2.0 * (3.0 * box_vol / (4.0 * np.pi * n)) ** (1.0 / 3.0)
-                size_target = {"mean": mean, "std": std_dev}
+                size_target = {"type": "normal", "mean": mean, "std": std_dev}
+            elif dist == "bimodal":
+                bp = sp.get("bimodal_params")
+                if bp is not None:
+                    frac, m1, s1, m2, s2 = bp
+                    size_target = {"type": "bimodal", "frac": frac,
+                                   "m1": m1, "s1": s1, "m2": m2, "s2": s2}
             elif dist == "laminate" and sp.get("laminate_in_plane_dist") == "normal" and std_dev is not None:
                 box_start = np.asarray(sp["box_start"], dtype=float)
                 box_end = np.asarray(sp["box_end"], dtype=float)
@@ -501,7 +616,7 @@ class MainWindow(QMainWindow):
                 plane_area = float(np.prod(box_size[active]))
                 n = sp["n_grains"]
                 mean = 2.0 * np.sqrt(plane_area / (np.pi * n))
-                size_target = {"mean": mean, "std": std_dev}
+                size_target = {"type": "normal", "mean": mean, "std": std_dev}
 
         op = self._last_ori_params
         if op is not None:
@@ -524,6 +639,8 @@ class MainWindow(QMainWindow):
         """Store seed/orientation results; render deferred to _render_all."""
         self._seed_result = seed_result
         self._orientation_result = orientation_result
+        self._edit_cache.clear()
+        self._current_grain_id = -1
 
         # configure editor spinbox
         dock = self.settings_dock
@@ -794,18 +911,33 @@ class MainWindow(QMainWindow):
                 name=f"crystal_{sym}",
             )
 
-        # overlay 1×1×1 unit-cell wireframe box
-        supercell_dims = np.diag(atoms.cell)          # 2×2×2 supercell size
-        unit_dims = supercell_dims / 2.0              # single unit-cell size
-        x, y, z = unit_dims
-        corners = np.array([
-            [0, 0, 0], [x, 0, 0], [x, y, 0], [0, y, 0],
-            [0, 0, z], [x, 0, z], [x, y, z], [0, y, z],
-        ])
+        # overlay unit-cell wireframe parallelepiped
+        uc = atoms.info.get("_unit_cell")
+        if uc is not None:
+            # Build corners from the three unit-cell vectors
+            a1, a2, a3 = np.asarray(uc[0]), np.asarray(uc[1]), np.asarray(uc[2])
+            corners = np.array([
+                [0, 0, 0],          # 0 — origin
+                a1,                 # 1
+                a1 + a2,            # 2
+                a2,                 # 3
+                a3,                 # 4
+                a1 + a3,            # 5
+                a1 + a2 + a3,       # 6
+                a2 + a3,            # 7
+            ])
+        else:
+            # Fallback: axis-aligned box from cell diagonal
+            d = np.abs(np.diag(atoms.cell))
+            corners = np.array([
+                [0, 0, 0], [d[0], 0, 0], [d[0], d[1], 0], [0, d[1], 0],
+                [0, 0, d[2]], [d[0], 0, d[2]], [d[0], d[1], d[2]], [0, d[1], d[2]],
+            ])
+        # Edges for a walk-around ordering: base 0→1→2→3→0, top 4→5→6→7→4, verticals
         edges = np.array([
-            [0, 1], [1, 2], [2, 3], [3, 0],
-            [4, 5], [5, 6], [6, 7], [7, 4],
-            [0, 4], [1, 5], [2, 6], [3, 7],
+            [0, 1], [1, 2], [2, 3], [3, 0],   # base
+            [4, 5], [5, 6], [6, 7], [7, 4],   # top
+            [0, 4], [1, 5], [2, 6], [3, 7],   # verticals
         ])
         box_lines = pv.PolyData(corners, lines=np.hstack([np.full((len(edges), 1), 2), edges]).ravel())
         plotter.add_mesh(box_lines, color="black", line_width=2)
@@ -818,41 +950,100 @@ class MainWindow(QMainWindow):
     # Point picking & grain editing
     # ------------------------------------------------------------------
 
-    def _on_grain_id_changed(self, grain_id: int) -> None:
-        """Populate editor fields from the selected grain and highlight it."""
+    def _on_editor_field_changed(self, *args) -> None:
+        """Enable the Apply Edit button when the user edits any field."""
+        self.settings_dock.edit_apply_btn.setEnabled(True)
+        self.settings_dock.edit_apply_btn.setStyleSheet(
+            "QPushButton { background-color: #1976D2; color: white; "
+            "font-weight: bold; border: none; border-radius: 3px; "
+            "padding: 4px 12px; }"
+            "QPushButton:hover { background-color: #1565C0; }"
+        )
+
+    def _update_apply_btn_state(self) -> None:
+        """Enable (blue) the Apply Edit button if edits are pending, else disable (gray)."""
+        btn = self.settings_dock.edit_apply_btn
+        has_edits = bool(self._edit_cache)
+        if not has_edits and self._current_grain_id >= 0:
+            # Check if current grain's fields differ from stored values
+            has_edits = self._current_grain_has_edits()
+        btn.setEnabled(has_edits)
+        if has_edits:
+            btn.setStyleSheet(
+                "QPushButton { background-color: #1976D2; color: white; "
+                "font-weight: bold; border: none; border-radius: 3px; "
+                "padding: 4px 12px; }"
+                "QPushButton:hover { background-color: #1565C0; }"
+            )
+        else:
+            btn.setStyleSheet(
+                "QPushButton { background-color: #BDBDBD; color: #757575; "
+                "font-weight: bold; border: none; border-radius: 3px; "
+                "padding: 4px 12px; }"
+            )
+
+    def _current_grain_has_edits(self) -> bool:
+        """Return True if any spinbox for the current grain differs from stored data."""
+        if self._seed_result is None or self._current_grain_id < 0:
+            return False
+        gid = self._current_grain_id
         dock = self.settings_dock
-
-        if self._seed_result is None or self._orientation_result is None:
-            return
-        if grain_id < 0 or grain_id >= self._seed_result.n_grains:
-            # Blank selection — clear fields, remove highlight, re-render all
-            dock.edit_x.blockSignals(True)
-            dock.edit_y.blockSignals(True)
-            dock.edit_z.blockSignals(True)
-            dock.edit_alpha.blockSignals(True)
-            dock.edit_beta.blockSignals(True)
-            dock.edit_gamma.blockSignals(True)
-            dock.edit_grain_diam.blockSignals(True)
-            dock.edit_x.setValue(0.0)
-            dock.edit_y.setValue(0.0)
-            dock.edit_z.setValue(0.0)
-            dock.edit_alpha.setValue(0.0)
-            dock.edit_beta.setValue(0.0)
-            dock.edit_gamma.setValue(0.0)
-            dock.edit_grain_diam.setValue(0.0)
-            dock.edit_x.blockSignals(False)
-            dock.edit_y.blockSignals(False)
-            dock.edit_z.blockSignals(False)
-            dock.edit_alpha.blockSignals(False)
-            dock.edit_beta.blockSignals(False)
-            dock.edit_gamma.blockSignals(False)
-            dock.edit_grain_diam.blockSignals(False)
-            dock.edit_apply_btn.setEnabled(False)
-            self._clear_highlight()
-            return
-
         seeds = self._seed_result.seeds
         eulers = self._orientation_result.euler_angles
+        _radii = getattr(self._seed_result, "target_radii", None)
+        old_radius = float(_radii[gid]) if _radii is not None and len(_radii) > gid else 0.0
+
+        return (
+            dock.edit_x.value() != float(seeds[gid, 0])
+            or dock.edit_y.value() != float(seeds[gid, 1])
+            or dock.edit_z.value() != float(seeds[gid, 2])
+            or dock.edit_alpha.value() != float(eulers[gid, 0])
+            or dock.edit_beta.value() != float(eulers[gid, 1])
+            or dock.edit_gamma.value() != float(eulers[gid, 2])
+            or dock.edit_grain_radius.value() != old_radius
+        )
+
+    def _save_current_grain_edits(self) -> None:
+        """Save current spinbox values to cache if they differ from stored data."""
+        if self._current_grain_id < 0 or self._seed_result is None:
+            return
+        gid = self._current_grain_id
+        dock = self.settings_dock
+        seeds = self._seed_result.seeds
+        eulers = self._orientation_result.euler_angles
+        _radii = getattr(self._seed_result, "target_radii", None)
+        old_radius = float(_radii[gid]) if _radii is not None and len(_radii) > gid else 0.0
+
+        edits: dict[str, float] = {}
+        if dock.edit_x.value() != float(seeds[gid, 0]):
+            edits["x"] = dock.edit_x.value()
+        if dock.edit_y.value() != float(seeds[gid, 1]):
+            edits["y"] = dock.edit_y.value()
+        if dock.edit_z.value() != float(seeds[gid, 2]):
+            edits["z"] = dock.edit_z.value()
+        if dock.edit_alpha.value() != float(eulers[gid, 0]):
+            edits["alpha"] = dock.edit_alpha.value()
+        if dock.edit_beta.value() != float(eulers[gid, 1]):
+            edits["beta"] = dock.edit_beta.value()
+        if dock.edit_gamma.value() != float(eulers[gid, 2]):
+            edits["gamma"] = dock.edit_gamma.value()
+        if dock.edit_grain_radius.value() != old_radius:
+            edits["radius"] = dock.edit_grain_radius.value()
+
+        if edits:
+            self._edit_cache[gid] = edits
+        else:
+            self._edit_cache.pop(gid, None)
+
+    def _load_grain_edits(self, grain_id: int) -> None:
+        """Populate spinboxes from cache (if edited) or from stored data."""
+        dock = self.settings_dock
+        seeds = self._seed_result.seeds
+        eulers = self._orientation_result.euler_angles
+        _radii = getattr(self._seed_result, "target_radii", None)
+        stored_radius = float(_radii[grain_id]) if _radii is not None and len(_radii) > grain_id else 0.0
+
+        cached = self._edit_cache.get(grain_id)
 
         dock.edit_grain_id.blockSignals(True)
         dock.edit_x.blockSignals(True)
@@ -862,15 +1053,17 @@ class MainWindow(QMainWindow):
         dock.edit_beta.blockSignals(True)
         dock.edit_gamma.blockSignals(True)
         dock.edit_grain_diam.blockSignals(True)
+        dock.edit_grain_radius.blockSignals(True)
 
         dock.edit_grain_id.setValue(grain_id)
-        dock.edit_x.setValue(float(seeds[grain_id, 0]))
-        dock.edit_y.setValue(float(seeds[grain_id, 1]))
-        dock.edit_z.setValue(float(seeds[grain_id, 2]))
-        dock.edit_alpha.setValue(float(eulers[grain_id, 0]))
-        dock.edit_beta.setValue(float(eulers[grain_id, 1]))
-        dock.edit_gamma.setValue(float(eulers[grain_id, 2]))
+        dock.edit_x.setValue(cached["x"] if cached and "x" in cached else float(seeds[grain_id, 0]))
+        dock.edit_y.setValue(cached["y"] if cached and "y" in cached else float(seeds[grain_id, 1]))
+        dock.edit_z.setValue(cached["z"] if cached and "z" in cached else float(seeds[grain_id, 2]))
+        dock.edit_alpha.setValue(cached["alpha"] if cached and "alpha" in cached else float(eulers[grain_id, 0]))
+        dock.edit_beta.setValue(cached["beta"] if cached and "beta" in cached else float(eulers[grain_id, 1]))
+        dock.edit_gamma.setValue(cached["gamma"] if cached and "gamma" in cached else float(eulers[grain_id, 2]))
         dock.edit_grain_diam.setValue(float(self._seed_result.diameters[grain_id]))
+        dock.edit_grain_radius.setValue(cached["radius"] if cached and "radius" in cached else stored_radius)
 
         dock.edit_grain_id.blockSignals(False)
         dock.edit_x.blockSignals(False)
@@ -880,9 +1073,108 @@ class MainWindow(QMainWindow):
         dock.edit_beta.blockSignals(False)
         dock.edit_gamma.blockSignals(False)
         dock.edit_grain_diam.blockSignals(False)
-        dock.edit_apply_btn.setEnabled(True)
+        dock.edit_grain_radius.blockSignals(False)
 
-        self._update_highlight(seeds[grain_id], grain_id)
+    # --------------------------------------------------------------
+
+    def _on_grain_id_changed(self, grain_id: int) -> None:
+        """Populate editor fields from the selected grain and highlight it.
+
+        Edits to the previously-selected grain are saved to a cache so they
+        survive switching grains.  Switching back restores the cached values.
+        """
+        dock = self.settings_dock
+
+        if self._seed_result is None or self._orientation_result is None:
+            return
+
+        # Save edits for the grain we're leaving
+        self._save_current_grain_edits()
+
+        if grain_id < 0 or grain_id >= self._seed_result.n_grains:
+            # Blank selection — clear fields, remove highlight
+            dock.edit_x.blockSignals(True)
+            dock.edit_y.blockSignals(True)
+            dock.edit_z.blockSignals(True)
+            dock.edit_alpha.blockSignals(True)
+            dock.edit_beta.blockSignals(True)
+            dock.edit_gamma.blockSignals(True)
+            dock.edit_grain_diam.blockSignals(True)
+            dock.edit_grain_radius.blockSignals(True)
+            dock.edit_x.setValue(0.0)
+            dock.edit_y.setValue(0.0)
+            dock.edit_z.setValue(0.0)
+            dock.edit_alpha.setValue(0.0)
+            dock.edit_beta.setValue(0.0)
+            dock.edit_gamma.setValue(0.0)
+            dock.edit_grain_diam.setValue(0.0)
+            dock.edit_grain_radius.setValue(0.0)
+            dock.edit_x.blockSignals(False)
+            dock.edit_y.blockSignals(False)
+            dock.edit_z.blockSignals(False)
+            dock.edit_alpha.blockSignals(False)
+            dock.edit_beta.blockSignals(False)
+            dock.edit_gamma.blockSignals(False)
+            dock.edit_grain_diam.blockSignals(False)
+            dock.edit_grain_radius.blockSignals(False)
+            self._current_grain_id = -1
+            self._update_apply_btn_state()
+            self._clear_highlight()
+            return
+
+        self._current_grain_id = grain_id
+        self._load_grain_edits(grain_id)
+        self._update_apply_btn_state()
+
+        self._update_highlight(self._seed_result.seeds[grain_id], grain_id)
+
+    def _on_bimodal_params_changed(self, *args) -> None:
+        """Auto-calculate grain count from bimodal GMM parameters."""
+        dock = self.settings_dock
+        if dock.dist_combo.currentIndex() != 5:  # bimodal only
+            return
+        box_vol = float(
+            (dock.box_max_x.value() - dock.box_min_x.value())
+            * (dock.box_max_y.value() - dock.box_min_y.value())
+            * (dock.box_max_z.value() - dock.box_min_z.value())
+        )
+        frac = dock.dist_bim_frac.value()
+        m1 = dock.dist_bim_m1.value()
+        m2 = dock.dist_bim_m2.value()
+        avg_vol = frac * (np.pi / 6) * m1 ** 3 + (1 - frac) * (np.pi / 6) * m2 ** 3
+        n = max(1, int(np.round(box_vol * 0.58 / avg_vol)))
+        dock.qty_spin.blockSignals(True)
+        dock.qty_diam_spin.blockSignals(True)
+        dock.qty_spin.setValue(n)
+        dock.qty_diam_spin.setValue(round(
+            2.0 * (3.0 * box_vol / (4.0 * np.pi * n)) ** (1.0 / 3.0), 4
+        ))
+        dock.qty_spin.blockSignals(False)
+        dock.qty_diam_spin.blockSignals(False)
+
+    def _on_crystal_element_changed(self, text: str) -> None:
+        """Auto-fill structure and lattice params for known elements (Bravais only)."""
+        dock = self.settings_dock
+        if dock.crystal_combo.currentIndex() != 0:  # Bravais
+            return
+        symbol = text.strip()
+        info = _ELEM_STRUCTURE.get(symbol)
+        if info is None:
+            return
+        struct, a_val, c_val = info
+        # Update structure combo
+        idx = dock.crystal_type_combo.findText(struct)
+        if idx >= 0:
+            dock.crystal_type_combo.blockSignals(True)
+            dock.crystal_type_combo.setCurrentIndex(idx)
+            dock.crystal_type_combo.blockSignals(False)
+        # Update lattice parameters
+        dock.crystal_shared_a.blockSignals(True)
+        dock.crystal_shared_c.blockSignals(True)
+        dock.crystal_shared_a.setValue(a_val)
+        dock.crystal_shared_c.setValue(c_val)
+        dock.crystal_shared_a.blockSignals(False)
+        dock.crystal_shared_c.blockSignals(False)
 
     def _auto_tune_dimensions(self) -> None:
         """Snap box dimensions to exact integer multiples of the true 3D repeat distance."""
@@ -1157,54 +1449,65 @@ class MainWindow(QMainWindow):
         self.central.voronoi_plotter.render()
 
     def _on_apply_edit_clicked(self) -> None:
-        """Update the selected grain, recompute Voronoi & misorientations, re-render."""
+        """Apply all cached grain edits in one batch, then recompute and re-render."""
         if self._seed_result is None or self._orientation_result is None:
             return
 
-        dock = self.settings_dock
-        gid = dock.edit_grain_id.value()
-        if gid < 0:
+        # Save current grain's in-progress edits into the cache
+        self._save_current_grain_edits()
+
+        if not self._edit_cache:
             return
 
-        new_x = dock.edit_x.value()
-        new_y = dock.edit_y.value()
-        new_z = dock.edit_z.value()
-        new_a = dock.edit_alpha.value()
-        new_b = dock.edit_beta.value()
-        new_g = dock.edit_gamma.value()
+        seeds = self._seed_result.seeds
+        eulers = self._orientation_result.euler_angles
+        _radii = getattr(self._seed_result, "target_radii", None)
 
-        old_seed = self._seed_result.seeds[gid]
-        old_euler = self._orientation_result.euler_angles[gid]
+        any_seed = False
+        any_ori = False
+        any_radius = False
+        edited_grains: list[int] = []
 
-        seed_changed = (
-            new_x != old_seed[0] or new_y != old_seed[1] or new_z != old_seed[2]
-        )
-        ori_changed = (
-            new_a != old_euler[0] or new_b != old_euler[1] or new_g != old_euler[2]
-        )
+        for gid, edits in self._edit_cache.items():
+            edited_grains.append(gid)
 
-        if not (seed_changed or ori_changed):
-            return
+            if "x" in edits:
+                seeds[gid, 0] = edits["x"]
+                any_seed = True
+            if "y" in edits:
+                seeds[gid, 1] = edits["y"]
+                any_seed = True
+            if "z" in edits:
+                seeds[gid, 2] = edits["z"]
+                any_seed = True
+            if "alpha" in edits:
+                eulers[gid, 0] = edits["alpha"]
+                any_ori = True
+            if "beta" in edits:
+                eulers[gid, 1] = edits["beta"]
+                any_ori = True
+            if "gamma" in edits:
+                eulers[gid, 2] = edits["gamma"]
+                any_ori = True
+            if "radius" in edits:
+                if self._seed_result.target_radii is None:
+                    self._seed_result.target_radii = np.zeros(self._seed_result.n_grains)
+                self._seed_result.target_radii[gid] = edits["radius"]
+                any_radius = True
 
-        # --- update master data ---
-        self._seed_result.seeds[gid, 0] = new_x
-        self._seed_result.seeds[gid, 1] = new_y
-        self._seed_result.seeds[gid, 2] = new_z
-
-        self._orientation_result.euler_angles[gid, 0] = new_a
-        self._orientation_result.euler_angles[gid, 1] = new_b
-        self._orientation_result.euler_angles[gid, 2] = new_g
-
-        # --- recompute Voronoi (only if seed moved) ---
-        if seed_changed:
+        # --- recompute Voronoi (once for all seed/radius edits) ---
+        if any_seed or any_radius:
             from grain_seeds import GrainSeedGenerator
 
-            gen = GrainSeedGenerator(
+            _sr_kwargs: dict = dict(
                 box_start=tuple(float(x) for x in self._seed_result.box_start),
                 box_end=tuple(float(x) for x in self._seed_result.box_end),
                 distribution="customized",
                 seed_positions=self._seed_result.seeds,
             )
+            if self._seed_result.target_radii is not None:
+                _sr_kwargs["seed_radii"] = self._seed_result.target_radii
+            gen = GrainSeedGenerator(**_sr_kwargs)
             gen.generate_seeds()
             diameters, poly_data = gen.compute_grain_cells()
             self._seed_result.diameters = diameters
@@ -1212,8 +1515,8 @@ class MainWindow(QMainWindow):
         else:
             diameters = self._seed_result.diameters
 
-        # --- recompute misorientation (only if orientation changed) ---
-        if ori_changed:
+        # --- recompute misorientation (once for all orientation edits) ---
+        if any_ori:
             from orientation import OrientationAssigner
             from scipy.spatial.transform import Rotation
 
@@ -1231,12 +1534,16 @@ class MainWindow(QMainWindow):
         else:
             misos = self._orientation_result.misorientation_angles
 
-        # --- re-render affected viewports ---
-        if seed_changed:
+        # --- clear cache, update button ---
+        self._edit_cache.clear()
+        self._update_apply_btn_state()
+
+        # --- re-render ---
+        if any_seed or any_radius:
             self._render_voronoi_viewport(
                 self._seed_result, self._orientation_result,
             )
-        if seed_changed or ori_changed:
+        if any_seed or any_ori or any_radius:
             size_target, miso_target = self._chart_target_params()
             self.central.update_charts(
                 self._seed_result.diameters, misos,
@@ -1244,11 +1551,12 @@ class MainWindow(QMainWindow):
                 target_miso_angles=miso_target,
             )
 
-        # re-populate editor fields and re-highlight
-        self._on_grain_id_changed(gid)
+        # re-populate editor for the current grain (now from stored data)
+        self._on_grain_id_changed(self._current_grain_id)
 
+        n_grains = len(edited_grains)
         self.statusBar().showMessage(
-            f"Grain {gid} updated.", 3000
+            f"Applied edits to {n_grains} grain{'s' if n_grains > 1 else ''}.", 3000
         )
 
     # ------------------------------------------------------------------

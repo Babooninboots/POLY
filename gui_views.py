@@ -404,11 +404,12 @@ class GlobalSettingsDock(QDockWidget):
 
         self.dist_combo = QComboBox()
         self.dist_combo.addItems(
-            ["Random", "Normal Distribution", "Customized", "Laminate", "Evenly Spaced (1D)"]
+            ["Random", "Normal Distribution", "Customized", "Laminate",
+             "Evenly Spaced (1D)", "Bimodal"]
         )
         form.addRow("Distribution:", self.dist_combo)
 
-        # Normal → StdDev
+        # Normal / laminate+normal → StdDev
         dist_normal = QWidget()
         nl = QHBoxLayout(dist_normal)
         nl.setContentsMargins(0, 0, 0, 0)
@@ -437,6 +438,54 @@ class GlobalSettingsDock(QDockWidget):
         self.dist_laminate_stack = _make_stacked_pair(lam_widget)
         form.addRow(self.dist_laminate_stack)
 
+        # Bimodal → GMM params
+        bim_widget = QWidget()
+        bim_layout = QFormLayout(bim_widget)
+        bim_layout.setContentsMargins(0, 0, 0, 0)
+        bim_layout.setSpacing(3)
+        # Row 1: fraction in mode 1
+        frac_row = QHBoxLayout()
+        frac_row.addWidget(QLabel("Fraction in mode 1:"))
+        self.dist_bim_frac = QDoubleSpinBox()
+        self.dist_bim_frac.setRange(0.01, 0.99)
+        self.dist_bim_frac.setDecimals(2)
+        self.dist_bim_frac.setSingleStep(0.05)
+        self.dist_bim_frac.setValue(0.50)
+        frac_row.addWidget(self.dist_bim_frac)
+        bim_layout.addRow(frac_row)
+        # Row 2: mode 1 mean + std
+        m1_row = QHBoxLayout()
+        m1_row.addWidget(QLabel("Mode 1 mean (Angstrom):"))
+        self.dist_bim_m1 = QDoubleSpinBox()
+        self.dist_bim_m1.setRange(0.1, 1e7)
+        self.dist_bim_m1.setDecimals(2)
+        self.dist_bim_m1.setValue(50.0)
+        m1_row.addWidget(self.dist_bim_m1)
+        m1_row.addWidget(QLabel("Std:"))
+        self.dist_bim_s1 = QDoubleSpinBox()
+        self.dist_bim_s1.setRange(0.01, 1e7)
+        self.dist_bim_s1.setDecimals(2)
+        self.dist_bim_s1.setValue(5.0)
+        m1_row.addWidget(self.dist_bim_s1)
+        bim_layout.addRow(m1_row)
+        # Row 3: mode 2 mean + std
+        m2_row = QHBoxLayout()
+        m2_row.addWidget(QLabel("Mode 2 mean (Angstrom):"))
+        self.dist_bim_m2 = QDoubleSpinBox()
+        self.dist_bim_m2.setRange(0.1, 1e7)
+        self.dist_bim_m2.setDecimals(2)
+        self.dist_bim_m2.setValue(150.0)
+        m2_row.addWidget(self.dist_bim_m2)
+        m2_row.addWidget(QLabel("Std:"))
+        self.dist_bim_s2 = QDoubleSpinBox()
+        self.dist_bim_s2.setRange(0.01, 1e7)
+        self.dist_bim_s2.setDecimals(2)
+        self.dist_bim_s2.setValue(15.0)
+        m2_row.addWidget(self.dist_bim_s2)
+        bim_layout.addRow(m2_row)
+        self.dist_bimodal_stack = _make_stacked_pair(bim_widget)
+        form.addRow(self.dist_bimodal_stack)
+
         self.dist_combo.currentIndexChanged.connect(self._on_dist_mode)
         self._main_layout.addWidget(group)
 
@@ -444,6 +493,7 @@ class GlobalSettingsDock(QDockWidget):
         self.dist_normal_stack.setCurrentIndex(1 if idx in (1, 3) else 0)
         self.dist_custom_stack.setCurrentIndex(1 if idx == 2 else 0)
         self.dist_laminate_stack.setCurrentIndex(1 if idx in (3, 4) else 0)
+        self.dist_bimodal_stack.setCurrentIndex(1 if idx == 5 else 0)
         if idx == 3:
             self.ori_combo.setCurrentIndex(1)  # laminate pairs with Z-axis alignment
             self.dist_stddev.setValue(20.0)
@@ -456,8 +506,21 @@ class GlobalSettingsDock(QDockWidget):
             self.dist_lam_inplane_dist_combo.addItems(["x", "y", "z"])
             self.ori_combo.setCurrentIndex(1)  # pairs with Z-axis alignment
             self.dist_stddev.setValue(0.0)
+        elif idx == 5:
+            self.dist_stddev.setValue(0.0)
+            # Bimodal: disable quantity inputs (read-only), count is auto-calculated
+            self.qty_spin.setReadOnly(True)
+            self.qty_spin.setEnabled(False)
+            self.qty_diam_spin.setReadOnly(True)
+            self.qty_diam_spin.setEnabled(False)
         else:
             self.dist_stddev.setValue(20.0)
+            self.qty_spin.setReadOnly(False)
+            self.qty_spin.setEnabled(True)
+            self.qty_diam_spin.setReadOnly(False)
+            self.qty_diam_spin.setEnabled(
+                self.qty_mode_combo.currentIndex() == 1
+            )
 
     # ------------------------------------------------------------------
     # 4. Crystal Structure
@@ -565,8 +628,7 @@ class GlobalSettingsDock(QDockWidget):
             self.crystal_type_label.setText("Structure:")
             self.crystal_elem_label.setText("Element:")
             self.crystal_type_combo.addItems([
-                "sc", "fcc", "bcc", "hcp", "diamond",
-                "tetragonal", "bct",
+                "sc", "fcc", "bcc", "hcp", "diamond", "bct",
             ])
             self.crystal_elem_edit.setText("Mg")
             self.crystal_shared_a.setValue(3.0)
@@ -678,6 +740,12 @@ class GlobalSettingsDock(QDockWidget):
             "QDoubleSpinBox { background-color: #E0E0E0; }"
         )
         id_diam_row.addWidget(self.edit_grain_diam)
+        id_diam_row.addWidget(QLabel("  LV Radius:"))
+        self.edit_grain_radius = QDoubleSpinBox()
+        self.edit_grain_radius.setDecimals(4)
+        self.edit_grain_radius.setRange(0.0, 1e7)
+        self.edit_grain_radius.setToolTip("Laguerre-Voronoi power-distance radius")
+        id_diam_row.addWidget(self.edit_grain_radius)
         form.addRow("Grain ID:", id_diam_row)
 
         xyz_row = QHBoxLayout()
@@ -718,6 +786,11 @@ class GlobalSettingsDock(QDockWidget):
 
         self.edit_apply_btn = QPushButton("Apply Edit")
         self.edit_apply_btn.setEnabled(False)
+        self.edit_apply_btn.setStyleSheet(
+            "QPushButton { background-color: #BDBDBD; color: #757575; "
+            "font-weight: bold; border: none; border-radius: 3px; "
+            "padding: 4px 12px; }"
+        )
         self.edit_apply_btn.clicked.connect(self.edit_apply_clicked.emit)
         form.addRow(self.edit_apply_btn)
 
@@ -1035,12 +1108,20 @@ class CentralWidget(QWidget):
             self.grain_size_plot.setLabel("bottom", "Equivalent Diameter (Å)")
             self.grain_size_plot.setLabel("left", "Count")
 
-            # --- Grain Size target curve (normal distribution) ---
+            # --- Grain Size target curve ---
             if target_size_params is not None and len(diameters) > 1 and np.ptp(diameters) >= 1e-5:
-                mean = target_size_params["mean"]
-                std = target_size_params["std"]
                 x_vals = np.linspace(size_bins[0], size_bins[-1], 200)
-                pdf_vals = scipy_norm.pdf(x_vals, loc=mean, scale=std)
+                _type = target_size_params.get("type", "normal")
+                if _type == "bimodal":
+                    frac = target_size_params["frac"]
+                    m1, s1 = target_size_params["m1"], target_size_params["s1"]
+                    m2, s2 = target_size_params["m2"], target_size_params["s2"]
+                    pdf_vals = (frac * scipy_norm.pdf(x_vals, loc=m1, scale=s1)
+                                + (1 - frac) * scipy_norm.pdf(x_vals, loc=m2, scale=s2))
+                else:
+                    mean = target_size_params["mean"]
+                    std = target_size_params["std"]
+                    pdf_vals = scipy_norm.pdf(x_vals, loc=mean, scale=std)
                 y_vals = pdf_vals * len(diameters) * (size_bins[1] - size_bins[0])
                 self.grain_size_plot.plot(
                     x_vals, y_vals, pen=pg.mkPen(color="y", width=3),

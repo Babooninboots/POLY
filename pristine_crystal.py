@@ -285,8 +285,7 @@ class PristineCrystal:
         symbol : str
             Chemical symbol (e.g. ``"Al"``, ``"NaCl"``, ``"MgO"``).
         crystalstructure : str, optional
-            One of ``sc, fcc, bcc, tetragonal, bct, hcp, rhombohedral,
-            orthorhombic, mcl, diamond, zincblende, rocksalt,
+            One of ``sc, fcc, bcc, bct, hcp, diamond, zincblende, rocksalt,
             cesiumchloride, fluorite, wurtzite``.
         a, b, c : float, optional
             Lattice constants in Angstrom.
@@ -320,18 +319,33 @@ class PristineCrystal:
             # Let ASE guess; it will fall back to fcc for single elements
             pass
 
-        atoms = ase_bulk(
-            symbol,
-            crystalstructure=crystalstructure,
-            a=a,
-            b=b,
-            c=c,
-            covera=covera,
-            u=u,
-            alpha=alpha,
-            orthorhombic=orthorhombic,
-            cubic=cubic,
-        )
+        # Use conventional cells for better preview and solver stability.
+        # sc/fcc/bcc/diamond are naturally cubic; bct needs a manual build.
+        _cubic = cubic
+        _is_bct = crystalstructure == "bct"
+        if crystalstructure in ("sc", "fcc", "bcc", "diamond"):
+            _cubic = True
+
+        if _is_bct and a is not None and c is not None:
+            atoms = Atoms(
+                f"{symbol}2",
+                positions=[[0, 0, 0], [a / 2, a / 2, c / 2]],
+                cell=[[a, 0, 0], [0, a, 0], [0, 0, c]],
+                pbc=True,
+            )
+        else:
+            atoms = ase_bulk(
+                symbol,
+                crystalstructure=crystalstructure,
+                a=a,
+                b=b,
+                c=c,
+                covera=covera,
+                u=u,
+                alpha=alpha,
+                orthorhombic=orthorhombic,
+                cubic=_cubic,
+            )
         return cls(atoms, box_start=box_start, box_end=box_end, coverage=coverage)
 
     # ------------------------------------------------------------------
@@ -661,6 +675,9 @@ class PristineCrystal:
             print(f"  Supercell:  {len(self.atoms)} atoms")
 
         self.center_to_origin()
+
+        # Store unit-cell vectors for the GUI wireframe renderer
+        self.atoms.info["_unit_cell"] = self.unit_cell.get_cell()[:]
 
         pos = self.atoms.get_positions()
         if verbose:

@@ -13,8 +13,9 @@ crystallographic orientations.
 
 **Backend pipeline** (runs in background threads):
 
-1. **Seed generation** — grain positions via random, normal, laminate, or
-  evenly-spaced distributions, with Voronoi tessellation via pyvoro.
+1. **Seed generation** — grain positions via random, normal, bimodal (Gaussian
+  mixture), customized, laminate, or evenly-spaced distributions, with Force-Biased
+  Sphere Packing and Voronoi tessellation via pyvoro2.
 2. **Pristine crystal** — supercell generation from Bravais lattices,
   intermetallics, spacegroup data, CIF files, or POLY `.crystal` files.
 3. **Orientation assignment** — Euler angles (ZXZ convention) via random,
@@ -98,6 +99,7 @@ box volume and a spherical-equivalent-diameter model.
 | --- | --- | --- |
 | **Random** | Uniform random seed positions | —   |
 | **Normal Distribution** | Force-biased sphere packing targeting a log-normal size distribution | StdDev (Å) |
+| **Bimodal** | Gaussian mixture model: two normal distributions with number fraction | Fraction in mode 1, two means, two stds; count auto-calculated |
 | **Customized** | Load pre-defined seed positions from a `.seed` file | File picker |
 | **Laminate** | 2D columnar grains on a mid-plane with in-plane Voronoi | In-plane distribution (`random` or `normal`) |
 | **Evenly Spaced (1D)** | Seeds evenly spaced along one axis, spanning the full perpendicular plane | Axis selection (`x`, `y`, or `z`) |
@@ -139,8 +141,8 @@ crystal repeat distance in each perpendicular direction.
 Click **Generate Initial Seeds**. A background thread:
 
 - Places seeds via the chosen distribution.
-- Runs Voronoi tessellation (Monte Carlo optimization for normal/laminar-normal
-  distributions).
+- Runs Voronoi tessellation (FBSP Monte Carlo optimization for normal, bimodal,
+  and laminar-normal distributions).
 - Assigns orientations.
 - Generates the pristine crystal supercell.
 

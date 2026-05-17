@@ -81,6 +81,7 @@ class ForceBiasedPacker:
         target_std: float,
         laminate_direction: str | None = None,
         rng: np.random.Generator | None = None,
+        bimodal_params: tuple | None = None,
     ):
         self.box_start = box_start
         self.box_end = box_end
@@ -89,6 +90,7 @@ class ForceBiasedPacker:
         self.target_mean = target_mean
         self.target_std = target_std
         self.rng = rng or np.random.default_rng()
+        self.bimodal_params = bimodal_params  # (frac, m1, s1, m2, s2) or None
 
         self.laminate_direction = laminate_direction
         if laminate_direction is not None:
@@ -125,11 +127,21 @@ class ForceBiasedPacker:
         is_2d = self.laminate_direction is not None
         ndim = 2 if is_2d else 3
 
-        # 1. Sample target diameters from N(target_mean, target_std)
-        target_diameters = self.rng.normal(
-            self.target_mean, self.target_std, size=self.n_grains
-        )
-        target_diameters = np.clip(target_diameters, 0.1 * self.target_mean, None)
+        # 1. Sample target diameters
+        if self.bimodal_params is not None:
+            frac, m1, s1, m2, s2 = self.bimodal_params
+            n1 = max(1, int(round(self.n_grains * frac)))
+            n2 = self.n_grains - n1
+            d1 = self.rng.normal(m1, s1, size=n1)
+            d2 = self.rng.normal(m2, s2, size=n2)
+            target_diameters = np.concatenate([d1, d2])
+            self.rng.shuffle(target_diameters)
+            target_diameters = np.clip(target_diameters, 0.1 * min(m1, m2), None)
+        else:
+            target_diameters = self.rng.normal(
+                self.target_mean, self.target_std, size=self.n_grains
+            )
+            target_diameters = np.clip(target_diameters, 0.1 * self.target_mean, None)
 
         # 2. Compute target sizes and radii
         if is_2d:
@@ -261,6 +273,7 @@ class GrainSeedGenerator:
         std_dev: float | None = None,
         seed_positions: np.ndarray | None = None,
         seed_radii: np.ndarray | None = None,
+        bimodal_params: tuple | None = None,
         random_seed: int | None = None,
         laminate_in_plane_dist: str = "random",
         laminate_direction: str = "z",
@@ -272,13 +285,14 @@ class GrainSeedGenerator:
         self.box_volume = float(np.prod(self.box_size))
 
         # -- distribution validation --
-        if distribution not in ("random", "normal", "customized", "laminate", "even"):
+        if distribution not in ("random", "normal", "customized", "laminate", "even", "bimodal"):
             raise ValueError(
                 f"distribution must be 'random', 'normal', 'customized', "
-                f"'laminate', or 'even', got '{distribution}'"
+                f"'laminate', 'even', or 'bimodal', got '{distribution}'"
             )
         self.distribution = distribution
         self.std_dev = std_dev
+        self._bimodal_params = bimodal_params
         self._custom_seeds: np.ndarray | None = None
 
         # -- laminate parameters --
@@ -559,6 +573,11 @@ class GrainSeedGenerator:
             print(f"  Dist:       {self.distribution}", end="")
             if self.distribution == "normal":
                 print(f" (sigma_target = {self.std_dev:.4f})", end="")
+            elif self.distribution == "bimodal":
+                if self._bimodal_params:
+                    f, m1, s1, m2, s2 = self._bimodal_params
+                    print(f" (GMM: f1={f:.2f}, m1={m1:.1f}, s1={s1:.1f}, "
+                          f"m2={m2:.1f}, s2={s2:.1f})", end="")
             elif self.distribution == "laminate":
                 print(f"  |  direction = {self.laminate_direction},  "
                       f"in-plane dist = {self.laminate_in_plane_dist}", end="")
@@ -575,6 +594,7 @@ class GrainSeedGenerator:
         # 3. Optimize if requested (Force-Biased Sphere Packing)
         needs_packing = (
             self.distribution == "normal"
+            or self.distribution == "bimodal"
             or (
                 self.distribution == "laminate"
                 and self.laminate_in_plane_dist == "normal"
@@ -604,9 +624,10 @@ class GrainSeedGenerator:
                 self.box_end,
                 self.n_grains,
                 target_mean=target_mean,
-                target_std=self.std_dev,
+                target_std=self.std_dev if self.std_dev else 0.0,
                 laminate_direction=lam_dir,
                 rng=self.rng,
+                bimodal_params=self._bimodal_params,
             )
             if verbose:
                 dim_label = "2D" if is_laminate else "3D"
@@ -618,6 +639,11 @@ class GrainSeedGenerator:
             )
             diameters, polyhedron_data = self.compute_grain_cells()
             neighbors = self.get_voronoi_neighbors()
+            # For bimodal, use target-radii-derived diameters so the
+            # Gaussian-mixture signal is not washed out by the Voronoi
+            # re-tessellation (which has only weak correlation with radii).
+            if self.distribution == "bimodal":
+                diameters = 2.0 * self.target_radii
             if verbose:
                 print("  FBSP finished")
                 print(
@@ -688,6 +714,7 @@ def generate_grains(
     std_dev: float | None = None,
     seed_positions: np.ndarray | None = None,
     seed_radii: np.ndarray | None = None,
+    bimodal_params: tuple | None = None,
     random_seed: int | None = None,
     laminate_in_plane_dist: str = "random",
     laminate_direction: str = "z",
@@ -705,6 +732,7 @@ def generate_grains(
         std_dev=std_dev,
         seed_positions=seed_positions,
         seed_radii=seed_radii,
+        bimodal_params=bimodal_params,
         random_seed=random_seed,
         laminate_in_plane_dist=laminate_in_plane_dist,
         laminate_direction=laminate_direction,

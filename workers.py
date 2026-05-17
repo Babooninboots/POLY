@@ -122,6 +122,7 @@ class SeedGenerationWorker(QThread):
         csl_angle_deg: float = 0.0,
         laminate_in_plane_dist: str = "random",
         laminate_direction: str = "z",
+        bimodal_params: tuple | None = None,
         run_seeds: bool = True,
         run_ori: bool = True,
         cached_seed_result=None,
@@ -144,6 +145,7 @@ class SeedGenerationWorker(QThread):
         self._csl_angle_deg = csl_angle_deg
         self._laminate_in_plane_dist = laminate_in_plane_dist
         self._laminate_direction = laminate_direction
+        self._bimodal_params = bimodal_params
         self._run_seeds = run_seeds
         self._run_ori = run_ori
         self._cached_seed = cached_seed_result
@@ -201,6 +203,7 @@ class SeedGenerationWorker(QThread):
                     seed_radii=seed_radii,
                     laminate_in_plane_dist=self._laminate_in_plane_dist,
                     laminate_direction=self._laminate_direction,
+                    bimodal_params=self._bimodal_params,
                     progress_callback=_progress_cb,
                     pause_callback=_pause_cb,
                     verbose=False,
@@ -382,6 +385,9 @@ class CrystalGenerationWorker(QThread):
                 )
 
             preview_atoms = pc.unit_cell * (2, 2, 2)
+            # Store the true unit-cell vectors so the viewport wireframe
+            # draws a single conventional cell, not the 2x2x2 preview box.
+            preview_atoms.info["_unit_cell"] = pc.unit_cell.get_cell()[:]
             self.finished_crystal.emit(preview_atoms)
 
         except Exception as exc:

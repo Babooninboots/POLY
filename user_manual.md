@@ -13,8 +13,9 @@ crystallographic orientations.
 
 **Backend pipeline** (runs in background threads):
 
-1. **Seed generation** — grain positions via random, normal, laminate, or
-   evenly-spaced distributions, with Voronoi tessellation via pyvoro.
+1. **Seed generation** — grain positions via random, normal, bimodal (Gaussian
+   mixture), customized, laminate, or evenly-spaced distributions, with
+   Force-Biased Sphere Packing and Voronoi tessellation via pyvoro2.
 2. **Pristine crystal** — supercell generation from Bravais lattices,
    intermetallics, spacegroup data, CIF files, or POLY `.crystal` files.
 3. **Orientation assignment** — Euler angles (ZXZ convention) via random,
@@ -98,6 +99,7 @@ box volume and a spherical-equivalent-diameter model.
 | ----------------------- | ------------------------------------------------------------------------- | -------------------------------------------- |
 | **Random**              | Uniform random seed positions                                             | —                                            |
 | **Normal Distribution** | Force-biased sphere packing targeting a log-normal size distribution      | StdDev (Å)                                   |
+| **Bimodal**             | Gaussian mixture model: two normal distributions blended by number fraction | Fraction in mode 1, two means, two stds; count auto-calculated |
 | **Customized**          | Load pre-defined seed positions from a `.seed` file                       | File picker                                  |
 | **Laminate**            | 2D columnar grains on a mid-plane with in-plane Voronoi                   | In-plane distribution (`random` or `normal`) |
 | **Evenly Spaced (1D)**  | Seeds evenly spaced along one axis, spanning the full perpendicular plane | Axis selection (`x`, `y`, or `z`)            |
@@ -317,11 +319,14 @@ Seeds are placed directly without optimization:
 
 #### Force-Biased Sphere Packing (FBSP)
 
-Used when a target grain-size distribution is specified (Normal Distribution
-mode, or Laminate with Normal in-plane distribution).
+Used when a target grain-size distribution is specified (Normal Distribution,
+Bimodal, or Laminate with Normal in-plane distribution).
 
-1. **Target sampling**: each grain is assigned a target diameter drawn from
-   N(target_mean, target_std), clipped to ≥ 0.1 × mean.
+1. **Target sampling**: each grain is assigned a target diameter.  For Normal
+   distribution: drawn from N(target_mean, target_std).  For Bimodal
+   distribution: drawn from a Gaussian mixture φ·N(μ₁,σ₁) + (1−φ)·N(μ₂,σ₂),
+   where φ is the user-specified number fraction in mode 1.  Clipped to
+   ≥ 0.1 × mean (or 0.1 × min(μ₁,μ₂) for bimodal).
 2. **Packing-fraction scaling**: diameters are scaled so the total sphere
    volume (3D, packing fraction ≈ 0.58) or area (2D, packing fraction ≈ 0.78)
    fills the domain, converting to equivalent Laguerre-Voronoi radii.
@@ -333,11 +338,15 @@ mode, or Laminate with Normal in-plane distribution).
      weighted by r_j/(r_i+r_j) so smaller spheres are displaced more.
    - Learning rate decays as lr ← lr × 0.995 per step.
    - Converges when max_overlap < 0.01 Å or no overlaps remain.
-4. **Output**: relaxed seed positions + target radii (used for Laguerre-Voronoi
-   power-distance tessellation in assembly).
+4. **Output**: relaxed seed positions + target radii.  For bimodal, the final
+   grain diameters are taken directly from the target radii (2 × r) to preserve
+   the Gaussian-mixture signal; for normal, diameters are recomputed from
+   Laguerre-Voronoi cell volumes.
 
 The algorithm supports pause/resume for live inspection of convergence, and
-early stop for user cancellation.
+early stop for user cancellation.  A yellow target-PDF curve is overlaid on
+the grain-size histogram (single Gaussian for Normal, Gaussian mixture for
+Bimodal).
 
 #### Voronoi Tessellation
 
@@ -548,10 +557,11 @@ grains = generate_grains(
     box_start=(0, 0, 0),
     box_end=(100, 100, 100),
     n_grains=30,                     # or avg_diameter=50.0
-    distribution="random",           # random | normal | customized | laminate | even
+    distribution="random",           # random | normal | bimodal | customized | laminate | even
     std_dev=8.0,                     # required for normal / laminate+normal
     seed_positions=custom_array,     # required for customized
     seed_radii=radii_array,          # optional: Laguerre-Voronoi radii for customized
+    bimodal_params=(0.3, 50, 5, 150, 15),  # (frac, m1, s1, m2, s2) required for bimodal
     random_seed=42,
     laminate_in_plane_dist="random", # random | normal (laminate only)
     laminate_direction="z",          # x | y | z (laminate & even)
