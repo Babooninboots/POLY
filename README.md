@@ -35,6 +35,26 @@ crystallographic orientations.
 
 ---
 
+## Table of Contents
+
+- [Overview](#overview)
+- [Getting Started](#getting-started)
+  - [Launch](#launch)
+  - [Window Layout](#window-layout)
+  - [Action Buttons (bottom bar, left to right)](#action-buttons-bottom-bar-left-to-right)
+- [Step-by-Step Workflow](#step-by-step-workflow)
+  - [1. Set the Simulation Box](#1-set-the-simulation-box)
+  - [2. Choose Grain Quantity](#2-choose-grain-quantity)
+  - [3. Select Grain Size Distribution](#3-select-grain-size-distribution)
+  - [4. Configure Crystal Structure](#4-configure-crystal-structure)
+  - [5. Choose Orientation Mode](#5-choose-orientation-mode)
+  - [6. Generate Seeds](#6-generate-seeds)
+  - [7. Review and Edit](#7-review-and-edit)
+  - [8. Save Intermediate State (Optional)](#8-save-intermediate-state-optional)
+  - [9. Configure Output](#9-configure-output)
+  - [10. Build the Polycrystal](#10-build-the-polycrystal)
+
+
 ## Getting Started
 
 ### Launch

@@ -35,6 +35,51 @@ crystallographic orientations.
 
 ---
 
+## Table of Contents
+
+- [Overview](#overview)
+- [Getting Started](#getting-started)
+  - [Launch](#launch)
+  - [Window Layout](#window-layout)
+  - [Action Buttons (bottom bar, left to right)](#action-buttons-bottom-bar-left-to-right)
+- [Step-by-Step Workflow](#step-by-step-workflow)
+  - [1. Set the Simulation Box](#1-set-the-simulation-box)
+  - [2. Choose Grain Quantity](#2-choose-grain-quantity)
+  - [3. Select Grain Size Distribution](#3-select-grain-size-distribution)
+  - [4. Configure Crystal Structure](#4-configure-crystal-structure)
+  - [5. Choose Orientation Mode](#5-choose-orientation-mode)
+  - [6. Generate Seeds](#6-generate-seeds)
+  - [7. Review and Edit](#7-review-and-edit)
+  - [8. Save Intermediate State (Optional)](#8-save-intermediate-state-optional)
+  - [9. Configure Output](#9-configure-output)
+  - [10. Build the Polycrystal](#10-build-the-polycrystal)
+- [Columnar Structures (Laminate / Evenly Spaced)](#columnar-structures-laminate-evenly-spaced)
+- [File Formats](#file-formats)
+  - [`.seed` — Seed positions](#seed-seed-positions)
+  - [`.euler` — Euler angles](#euler-euler-angles)
+  - [`.crystal` — Pristine crystal](#crystal-pristine-crystal)
+  - [`.data` — LAMMPS atomic data](#data-lammps-atomic-data)
+  - [`.dump` — LAMMPS dump](#dump-lammps-dump)
+- [Keyboard & Mouse](#keyboard-mouse)
+- [Tips](#tips)
+- [Algorithms](#algorithms)
+  - [Seed Distribution Optimization](#seed-distribution-optimization)
+  - [Misorientation Optimization](#misorientation-optimization)
+  - [Grain Assembly (Polycrystal Build)](#grain-assembly-polycrystal-build)
+- [Database](#database)
+  - [Materials Science Context](#materials-science-context)
+  - [External Python Libraries](#external-python-libraries)
+- [Standalone Python Scripts](#standalone-python-scripts)
+  - [Quick-Start: Minimal 5-Module Pipeline](#quick-start-minimal-5-module-pipeline)
+  - [Module 1: `grain_seeds` — Seed Generation & Voronoi Tessellation](#module-1-grainseeds-seed-generation-voronoi-tessellation)
+  - [Module 2: `pristine_crystal` — Crystal Supercell Generation](#module-2-pristinecrystal-crystal-supercell-generation)
+  - [Module 3: `orientation` — Orientation Assignment](#module-3-orientation-orientation-assignment)
+  - [Module 5: `pc_assembly` — Polycrystal Assembly](#module-5-pcassembly-polycrystal-assembly)
+  - [Z-Axis Alignment + Bicrystal Example](#z-axis-alignment-bicrystal-example)
+  - [Programmatic Build via `workers.py`](#programmatic-build-via-workerspy)
+  - [Validation Pattern](#validation-pattern)
+
+
 ## Getting Started
 
 ### Launch
@@ -249,6 +294,7 @@ cell shapes from the original FBSP run.
 
 ```
 # POLY crystal: {name}  |  {N} atoms  |  formula={formula}
+# crystal_system: {cubic|hexagonal|tetragonal|orthorhombic|triclinic}
 # cell_1: ax ay az
 # cell_2: bx by bz
 # cell_3: cx cy cz
@@ -257,6 +303,11 @@ Mg  x1 y1 z1
 ...
 ```
 
+The `# crystal_system:` header specifies the crystal symmetry system for
+correct misorientation calculation.  When saved from the GUI it is auto-detected
+from the structure type or spacegroup.  If absent (legacy files), defaults to
+`cubic`.
+
 ### `.data` — LAMMPS atomic data
 
 Standard LAMMPS format with masses block. Atom types are 1-based, ordered by
@@ -264,7 +315,8 @@ element.
 
 ### `.dump` — LAMMPS dump
 
-Per-atom fields: `id type x y z grain_id euler_angle_1 euler_angle_2 euler_angle_3`.
+Per-atom fields: `id_POLY type x y z grain_id euler_angle_1 euler_angle_2 euler_angle_3`.
+Grain IDs are 1-based.
 Grain IDs are 1-based.
 
 ---

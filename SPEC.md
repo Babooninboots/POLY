@@ -16,6 +16,21 @@ build. All backend modules can also be used headless via Python scripts.
 
 ---
 
+## Table of Contents
+
+- [1. Overview](#1-overview)
+- [2. Global Input Parameters](#2-global-input-parameters)
+- [3. Core Modules](#3-core-modules)
+  - [Module 1: Grain Seed Generation & Voronoi Tessellation  (`grain_seeds.py`)](#module-1-grain-seed-generation-voronoi-tessellation-grainsee)
+  - [Module 2: Pristine Crystal Generation  (`pristine_crystal.py`)](#module-2-pristine-crystal-generation-pristinecrystalpy)
+  - [Module 3: Orientation Assignment  (`orientation.py`)](#module-3-orientation-assignment-orientationpy)
+  - [Module 4: Interactive GUI  (`gui_main.py`, `gui_views.py`)](#module-4-interactive-gui-guimainpy-guiviewspy)
+  - [Module 5: Polycrystalline Assembly  (`pc_assembly.py`)](#module-5-polycrystalline-assembly-pcassemblypy)
+  - [Module 6: Data Output  (`pc_assembly.py`)](#module-6-data-output-pcassemblypy)
+- [4. File Inventory](#4-file-inventory)
+- [5. Dependencies](#5-dependencies)
+
+
 ## 2. Global Input Parameters
 
 | Parameter                   | Options                                                                                       |
@@ -133,6 +148,13 @@ centered at the origin.
 
 5. **`custom_profile`** — Load per-grain Euler angles from a `.euler` file
    (4 columns: `grain_id φ₁ Φ φ₂`).
+
+6. **Crystal symmetry** — The `OrientationAssigner` takes a `crystal_structure`
+   (e.g. ``"fcc"``, ``"L1_2"``), `crystal_system` (``"cubic"``, …), or
+   `spacegroup` number to select the proper rotational symmetry operators
+   (24 for cubic, 12 for hexagonal, 8 for tetragonal, 4 for orthorhombic,
+   1 for triclinic).  Misorientation is computed as
+   ``min_i |R1 · S_i · R2⁻¹|`` over all symmetry operators.
 
 **Output**
 Returns an `OrientationResult` dataclass: `euler_angles` (N×3, degrees),
@@ -255,7 +277,7 @@ final polycrystal.
 
 2. **LAMMPS Dump File** (`.dump`)
    Custom dump format for OVITO/ParaView visualisation:
-   `ITEM: ATOMS id type x y z grain_id euler_angle_1 euler_angle_2 euler_angle_3`.
+   `ITEM: ATOMS id_POLY type x y z grain_id euler_angle_1 euler_angle_2 euler_angle_3`.
    Atom lines are vectorised identically to the data file.
 
 3. **Parallel Output**
@@ -264,8 +286,11 @@ final polycrystal.
    first thread to complete.
 
 3. **Crystal File** (`.crystal`)
-   XYZ-format crystal save with cell vectors in header comments, readable by
-   the Custom crystal source.
+   XYZ-format crystal save with cell vectors and `# crystal_system:` in header
+   comments, readable by the Custom crystal source.  The crystal system header
+   (``cubic``, ``hexagonal``, ``tetragonal``, ``orthorhombic``, or
+   ``triclinic``) is auto-detected from the structure type or spacegroup and
+   used for symmetry-aware misorientation calculation on reload.
 
 4. **Seed File** (`.seed`)
    3-column (`x y z`) or 4-column (`x y z radius`) format. The 4-column variant

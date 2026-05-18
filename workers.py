@@ -47,6 +47,7 @@ def _load_crystal_file(path: str):
     symbols_list = []
     positions_list = []
     cell_rows = []
+    crystal_system = None
     with open(path, "r") as fh:
         for raw_line in fh:
             line = raw_line.strip()
@@ -54,7 +55,9 @@ def _load_crystal_file(path: str):
                 continue
             if line.startswith("#"):
                 lowered = line.lower()
-                if lowered.startswith("# cell_"):
+                if lowered.startswith("# crystal_system:"):
+                    crystal_system = line.split(":", 1)[1].strip()
+                elif lowered.startswith("# cell_"):
                     parts = line.split()
                     cell_rows.append([float(parts[2]), float(parts[3]), float(parts[4])])
                 continue
@@ -87,6 +90,8 @@ def _load_crystal_file(path: str):
     atoms.info["_cell_params"] = dict(
         a=a, b=b, c=c_val, alpha=alpha, beta=beta, gamma=gamma,
     )
+    if crystal_system:
+        atoms.info["crystal_system"] = crystal_system
     return atoms
 
 
@@ -123,6 +128,9 @@ class SeedGenerationWorker(QThread):
         laminate_in_plane_dist: str = "random",
         laminate_direction: str = "z",
         bimodal_params: tuple | None = None,
+        crystal_structure: str | None = None,
+        spacegroup: int | None = None,
+        crystal_system: str | None = None,
         run_seeds: bool = True,
         run_ori: bool = True,
         cached_seed_result=None,
@@ -146,6 +154,9 @@ class SeedGenerationWorker(QThread):
         self._laminate_in_plane_dist = laminate_in_plane_dist
         self._laminate_direction = laminate_direction
         self._bimodal_params = bimodal_params
+        self._crystal_structure = crystal_structure
+        self._spacegroup = spacegroup
+        self._crystal_system = crystal_system
         self._run_seeds = run_seeds
         self._run_ori = run_ori
         self._cached_seed = cached_seed_result
@@ -233,6 +244,9 @@ class SeedGenerationWorker(QThread):
                     mode=self._orientation_mode,
                     n_grains=seed_result.n_grains,
                     neighbors=seed_result.neighbors,
+                    crystal_structure=self._crystal_structure,
+                    crystal_system=self._crystal_system,
+                    spacegroup=self._spacegroup,
                     verbose=False,
                     **ori_kwargs,
                 )

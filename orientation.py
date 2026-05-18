@@ -21,6 +21,180 @@ from scipy.spatial.transform import Rotation
 
 
 # ---------------------------------------------------------------------------
+# Crystal symmetry operators (proper rotations, determinant +1)
+# ---------------------------------------------------------------------------
+
+
+def _build_cubic_sym_ops() -> Rotation:
+    """Return the 24 proper rotational symmetry operators for cubic crystals."""
+    ops = []
+    # Identity
+    ops.append(np.eye(3))
+    # 90, 180, 270 deg about x, y, z axes
+    for axis in ([1, 0, 0], [0, 1, 0], [0, 0, 1]):
+        for angle_deg in (90, 180, 270):
+            ops.append(Rotation.from_rotvec(
+                np.radians(angle_deg) * np.array(axis, dtype=float)
+            ).as_matrix())
+    # 180 deg about face diagonals: [110], [1-10], [101], [10-1], [011], [01-1]
+    for diag in ([1, 1, 0], [1, -1, 0], [1, 0, 1], [1, 0, -1], [0, 1, 1], [0, 1, -1]):
+        v = np.array(diag, dtype=float)
+        v /= np.linalg.norm(v)
+        ops.append(Rotation.from_rotvec(np.pi * v).as_matrix())
+    # 120, 240 deg about body diagonals: [111], [1-1-1], [-11-1], [-1-11]
+    for diag in ([1, 1, 1], [1, -1, -1], [-1, 1, -1], [-1, -1, 1]):
+        v = np.array(diag, dtype=float)
+        v /= np.linalg.norm(v)
+        for angle_deg in (120, 240):
+            ops.append(Rotation.from_rotvec(
+                np.radians(angle_deg) * v
+            ).as_matrix())
+    return Rotation.from_matrix(np.stack(ops, axis=0))
+
+
+def _build_hexagonal_sym_ops() -> Rotation:
+    """Return the 12 proper rotational symmetry operators for hexagonal crystals."""
+    ops = []
+    # Identity
+    ops.append(np.eye(3))
+    # 60, 120, 180, 240, 300 deg about z-axis
+    for angle_deg in (60, 120, 180, 240, 300):
+        ops.append(Rotation.from_rotvec(
+            np.radians(angle_deg) * np.array([0.0, 0.0, 1.0])
+        ).as_matrix())
+    # 180 deg about 6 directions in basal plane: at 0, 30, 60, 90, 120, 150 deg
+    for theta_deg in (0, 30, 60, 90, 120, 150):
+        theta = np.radians(theta_deg)
+        v = np.array([np.cos(theta), np.sin(theta), 0.0])
+        ops.append(Rotation.from_rotvec(np.pi * v).as_matrix())
+    return Rotation.from_matrix(np.stack(ops, axis=0))
+
+
+def _build_tetragonal_sym_ops() -> Rotation:
+    """Return the 8 proper rotational symmetry operators for tetragonal crystals."""
+    ops = []
+    # Identity
+    ops.append(np.eye(3))
+    # 90, 180, 270 deg about z-axis
+    for angle_deg in (90, 180, 270):
+        ops.append(Rotation.from_rotvec(
+            np.radians(angle_deg) * np.array([0.0, 0.0, 1.0])
+        ).as_matrix())
+    # 180 deg about x, y axes
+    for axis in ([1, 0, 0], [0, 1, 0]):
+        ops.append(Rotation.from_rotvec(np.pi * np.array(axis, dtype=float)).as_matrix())
+    # 180 deg about face diagonals: [110], [1-10]
+    for diag in ([1, 1, 0], [1, -1, 0]):
+        v = np.array(diag, dtype=float)
+        v /= np.linalg.norm(v)
+        ops.append(Rotation.from_rotvec(np.pi * v).as_matrix())
+    return Rotation.from_matrix(np.stack(ops, axis=0))
+
+
+def _build_orthorhombic_sym_ops() -> Rotation:
+    """Return the 4 proper rotational symmetry operators for orthorhombic crystals."""
+    ops = []
+    # Identity
+    ops.append(np.eye(3))
+    # 180 deg about x, y, z axes
+    for axis in ([1, 0, 0], [0, 1, 0], [0, 0, 1]):
+        ops.append(Rotation.from_rotvec(np.pi * np.array(axis, dtype=float)).as_matrix())
+    return Rotation.from_matrix(np.stack(ops, axis=0))
+
+
+def _build_triclinic_sym_ops() -> Rotation:
+    """Return only the identity operator (triclinic, no symmetry)."""
+    return Rotation.from_matrix(np.eye(3).reshape(1, 3, 3))
+
+
+# Cached symmetry operators
+_SYM_OPS_CACHE: dict[str, Rotation] = {
+    "cubic":        _build_cubic_sym_ops(),
+    "hexagonal":    _build_hexagonal_sym_ops(),
+    "tetragonal":   _build_tetragonal_sym_ops(),
+    "orthorhombic": _build_orthorhombic_sym_ops(),
+    "triclinic":    _build_triclinic_sym_ops(),
+}
+
+# Map common structure names → crystal system
+_STRUCTURE_SYMMETRY: dict[str, str] = {
+    # Bravais
+    "sc": "cubic", "fcc": "cubic", "bcc": "cubic", "diamond": "cubic",
+    "hcp": "hexagonal", "bct": "tetragonal",
+    # Intermetallics / compounds
+    "rocksalt": "cubic", "zincblende": "cubic",
+    "cesiumchloride": "cubic", "fluorite": "cubic",
+    "L1_2": "cubic", "B2": "cubic", "D0_3": "cubic", "L2_1": "cubic",
+    "A15": "cubic", "C15": "cubic",
+    "L1_0": "tetragonal", "D0_19": "hexagonal",
+    "wurtzite": "hexagonal",
+}
+
+
+def get_crystal_symmetry(crystal_structure: str | None = None,
+                         spacegroup: int | None = None) -> str:
+    """Determine the crystal system from structure name or spacegroup number.
+
+    Returns one of ``"cubic"``, ``"hexagonal"``, ``"tetragonal"``,
+    ``"orthorhombic"``, or ``"triclinic"``.  Defaults to ``"cubic"``.
+    """
+    if crystal_structure is not None:
+        sym = _STRUCTURE_SYMMETRY.get(crystal_structure)
+        if sym is not None:
+            return sym
+    if spacegroup is not None:
+        if 195 <= spacegroup <= 230:
+            return "cubic"
+        if 168 <= spacegroup <= 194:
+            return "hexagonal"
+        if 75 <= spacegroup <= 142:
+            return "tetragonal"
+        if 16 <= spacegroup <= 74:
+            return "orthorhombic"
+    return "cubic"  # default
+
+
+def get_sym_ops(crystal_system: str) -> Rotation:
+    """Return the symmetry operators for *crystal_system* as a Rotation object."""
+    if crystal_system not in _SYM_OPS_CACHE:
+        raise ValueError(
+            f"Unknown crystal system '{crystal_system}'. "
+            f"Choose from: {list(_SYM_OPS_CACHE.keys())}"
+        )
+    return _SYM_OPS_CACHE[crystal_system]
+
+
+def symmetry_from_atoms(atoms) -> str | None:
+    """Detect the crystal system from an ASE Atoms object.
+
+    Checks in order:
+    1. ``atoms.info["crystal_system"]`` — stored by POLY's .crystal loader
+    2. ``atoms.info["spacegroup"]`` — populated by ASE for CIF / spacegroup
+
+    Returns ``None`` if no symmetry information is present.
+    """
+    if not hasattr(atoms, "info"):
+        return None
+    # POLY .crystal header: explicit crystal system string
+    cs = atoms.info.get("crystal_system")
+    if cs is not None:
+        if cs in _SYM_OPS_CACHE:
+            return cs
+    # ASE spacegroup info (from CIF or spacegroup crystal)
+    sg_info = atoms.info.get("spacegroup")
+    if sg_info is not None:
+        if isinstance(sg_info, int):
+            sg = sg_info
+        else:
+            try:
+                sg = int(str(sg_info).split()[0])
+            except (ValueError, IndexError):
+                return None
+        return get_crystal_symmetry(spacegroup=sg)
+    return None
+
+
+# ---------------------------------------------------------------------------
 # Data structures
 # ---------------------------------------------------------------------------
 
@@ -94,6 +268,9 @@ class OrientationAssigner:
         n_grains: int,
         neighbors: list[list[int]] | None = None,
         random_seed: int | None = None,
+        crystal_structure: str | None = None,
+        crystal_system: str | None = None,
+        spacegroup: int | None = None,
     ):
         if mode not in (
             "random",
@@ -109,6 +286,15 @@ class OrientationAssigner:
         self.n_grains = n_grains
         self.neighbors = neighbors
         self.rng = np.random.default_rng(random_seed)
+
+        # Determine crystal symmetry for misorientation calculation
+        if crystal_system is not None:
+            self.crystal_system = crystal_system
+        elif crystal_structure is not None or spacegroup is not None:
+            self.crystal_system = get_crystal_symmetry(crystal_structure, spacegroup)
+        else:
+            self.crystal_system = "cubic"
+        self.sym_ops = get_sym_ops(self.crystal_system)
 
         # Validate prerequisites
         if mode in ("low_angle", "high_angle", "custom_misorientation"):
@@ -236,11 +422,18 @@ class OrientationAssigner:
     # Mode: low angle / high angle (BFS graph traversal)
     # ------------------------------------------------------------------
 
-    @staticmethod
-    def _misorientation_between(R1: Rotation, R2: Rotation) -> float:
-        """True 3D disorientation angle (deg) between two rotations."""
-        delta_R = R1 * R2.inv()
-        return float(np.degrees(delta_R.magnitude()))
+    def _misorientation_between(self, R1: Rotation, R2: Rotation) -> float:
+        """Crystallographic misorientation angle (deg) between two rotations.
+
+        Computes the minimum angle over all symmetrically equivalent relative
+        rotations:  min_i |R1 · S_i · R2⁻¹|  where S_i are the symmetry
+        operators for the crystal system (24 for cubic, 12 for hexagonal, etc.).
+        """
+        # ΔR = R1 · S_i · R2⁻¹  for each symmetry operator S_i
+        # Broadcasting: R1 (N,), sym_ops (M,), R2_inv (N,) → result (M,)
+        R2_inv = R2.inv()
+        delta_all = R1 * self.sym_ops * R2_inv  # (M,)  or (M, N) for multi-grain
+        return float(np.degrees(np.min(delta_all.magnitude())))
 
     def _assign_angle_bfs(
         self,
@@ -346,16 +539,21 @@ class OrientationAssigner:
     # ------------------------------------------------------------------
 
     def _compute_pairwise_misorientation(self, rotations: Rotation) -> np.ndarray:
-        """True 3D disorientation angle (deg) between each neighbour pair."""
+        """Crystallographic misorientation angle (deg) between each neighbour pair.
+
+        Accounts for crystal symmetry by evaluating all symmetry-equivalent
+        relative rotations and taking the minimum angle.
+        """
         edges: list[float] = []
 
         for i, nbrs in enumerate(self.neighbors):
             R_i = rotations[i]
+            R_i_inv = R_i.inv()
             for j in nbrs:
                 if i < j:  # count each edge once
                     R_j = rotations[j]
-                    delta_R = R_i * R_j.inv()
-                    edges.append(float(np.degrees(delta_R.magnitude())))
+                    delta_all = R_i * self.sym_ops * R_j.inv()
+                    edges.append(float(np.degrees(np.min(delta_all.magnitude()))))
 
         return np.array(edges) if edges else np.zeros(0)
 
@@ -607,6 +805,9 @@ def generate_orientations(
     n_grains: int,
     neighbors: list[list[int]] | None = None,
     random_seed: int | None = None,
+    crystal_structure: str | None = None,
+    crystal_system: str | None = None,
+    spacegroup: int | None = None,
     verbose: bool = True,
     **kwargs,
 ) -> OrientationResult:
@@ -616,6 +817,9 @@ def generate_orientations(
         n_grains=n_grains,
         neighbors=neighbors,
         random_seed=random_seed,
+        crystal_structure=crystal_structure,
+        crystal_system=crystal_system,
+        spacegroup=spacegroup,
     )
     return assigner.run(verbose=verbose, **kwargs)
 

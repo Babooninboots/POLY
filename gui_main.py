@@ -237,6 +237,7 @@ class MainWindow(QMainWindow):
         # crystal parameters (stored for build step)
         self._crystal_source: int = 0
         self._crystal_params: dict = {}
+        self._crystal_system: str | None = None  # detected from ASE atoms
         # grain editor edit cache
         self._edit_cache: dict[int, dict[str, float]] = {}
         self._current_grain_id: int = -1
@@ -453,6 +454,12 @@ class MainWindow(QMainWindow):
                 laminate_in_plane_dist=laminate_in_plane_dist,
                 laminate_direction=laminate_direction,
                 bimodal_params=bimodal_params,
+                crystal_structure=dock.crystal_type_combo.currentText().strip(),
+                spacegroup=(
+                    int(dock.crystal_sg_group.text().strip())
+                    if crystal_source == 2 else None
+                ),
+                crystal_system=self._crystal_system,
                 run_seeds=run_seeds,
                 run_ori=run_ori,
                 cached_seed_result=self._seed_result,
@@ -880,6 +887,10 @@ class MainWindow(QMainWindow):
             dock.crystal_shared_a.blockSignals(False)
             dock.crystal_shared_c.blockSignals(False)
 
+        # Detect crystal symmetry from ASE atoms (CIF, spacegroup sources)
+        from orientation import symmetry_from_atoms
+        self._crystal_system = symmetry_from_atoms(atoms)
+
         self._worker_done()
         self.statusBar().showMessage(
             f"Crystal: {len(atoms)} atoms.", 5000
@@ -1182,7 +1193,7 @@ class MainWindow(QMainWindow):
             return
         dock = self.settings_dock
 
-        dist_map = {0: "random", 1: "normal", 2: "customized", 3: "laminate", 4: "even"}
+        dist_map = {0: "random", 1: "normal", 2: "customized", 3: "laminate", 4: "even", 5: "bimodal"}
         distribution = dist_map[dock.dist_combo.currentIndex()]
 
         ori_map = {0: "random", 1: "z_alignment", 2: "low_angle", 3: "high_angle",
@@ -1523,10 +1534,13 @@ class MainWindow(QMainWindow):
             rot = Rotation.from_euler(
                 "zxz", self._orientation_result.euler_angles, degrees=True,
             )
+            _struct = (self._crystal_params.get("single_structure")
+                       or self._crystal_params.get("inter_type"))
             assigner = OrientationAssigner(
                 mode="custom_profile",
                 n_grains=self._seed_result.n_grains,
                 neighbors=self._seed_result.neighbors,
+                crystal_structure=_struct,
             )
             misos = assigner._compute_pairwise_misorientation(rot)
             self._orientation_result.misorientation_angles = misos
@@ -1563,6 +1577,20 @@ class MainWindow(QMainWindow):
     # Other placeholder slots
     # ------------------------------------------------------------------
 
+    def _crystal_system_from_gui(dock) -> str | None:
+        """Detect crystal system from the current GUI state."""
+        from orientation import get_crystal_symmetry
+        src = dock.crystal_combo.currentIndex()
+        if src in (0, 1):  # Bravais or Intermetallics
+            return get_crystal_symmetry(dock.crystal_type_combo.currentText().strip())
+        if src == 2:  # Spacegroup
+            try:
+                sg = int(dock.crystal_sg_group.text().strip())
+                return get_crystal_symmetry(spacegroup=sg)
+            except ValueError:
+                pass
+        return None
+
     def _on_save(self) -> None:
         """Save lattice point coordinates as {Name}.crystal."""
         if self._crystal_atoms is None:
@@ -1579,9 +1607,15 @@ class MainWindow(QMainWindow):
         positions = atoms.get_positions()
         symbols = atoms.get_chemical_symbols()
         cell = atoms.get_cell()  # 3×3 row-major
+        # Determine crystal system for the header
+        from orientation import symmetry_from_atoms
+        crys_sys = (symmetry_from_atoms(atoms)
+                    or self._crystal_system
+                    or _crystal_system_from_gui(self.settings_dock))
         header = (f"# POLY crystal: {name}  |  "
                   f"{len(atoms)} atoms  |  "
                   f"formula={atoms.get_chemical_formula()}\n"
+                  f"# crystal_system: {crys_sys}\n"
                   f"# cell_1: {cell[0,0]:.8f} {cell[0,1]:.8f} {cell[0,2]:.8f}\n"
                   f"# cell_2: {cell[1,0]:.8f} {cell[1,1]:.8f} {cell[1,2]:.8f}\n"
                   f"# cell_3: {cell[2,0]:.8f} {cell[2,1]:.8f} {cell[2,2]:.8f}\n"
