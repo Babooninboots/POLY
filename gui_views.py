@@ -494,6 +494,15 @@ class GlobalSettingsDock(QDockWidget):
         self.dist_custom_stack.setCurrentIndex(1 if idx == 2 else 0)
         self.dist_laminate_stack.setCurrentIndex(1 if idx in (3, 4) else 0)
         self.dist_bimodal_stack.setCurrentIndex(1 if idx == 5 else 0)
+        # Re-enable quantity inputs (may have been disabled by bimodal)
+        if idx != 5:
+            self.qty_spin.setReadOnly(False)
+            self.qty_spin.setEnabled(True)
+            self.qty_diam_spin.setReadOnly(False)
+            self.qty_diam_spin.setEnabled(
+                self.qty_mode_combo.currentIndex() == 1
+            )
+
         if idx == 3:
             self.ori_combo.setCurrentIndex(1)  # laminate pairs with Z-axis alignment
             self.dist_stddev.setValue(20.0)
@@ -515,12 +524,6 @@ class GlobalSettingsDock(QDockWidget):
             self.qty_diam_spin.setEnabled(False)
         else:
             self.dist_stddev.setValue(20.0)
-            self.qty_spin.setReadOnly(False)
-            self.qty_spin.setEnabled(True)
-            self.qty_diam_spin.setReadOnly(False)
-            self.qty_diam_spin.setEnabled(
-                self.qty_mode_combo.currentIndex() == 1
-            )
 
     # ------------------------------------------------------------------
     # 4. Crystal Structure
