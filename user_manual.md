@@ -161,6 +161,28 @@ box volume and a spherical-equivalent-diameter model.
 | **Spacegroup**     | Elements, Basis (fractional coordinates), Spacegroup number, Cell parameters (a,b,c,α,β,γ)                             |
 | **Custom (File)**  | `.cif`, `.crystal`, or ASE-readable file                                                                               |
 
+#### Multi-Phase Support
+
+Click the green **ADD CRYSTAL** button to create additional crystal phases (Phase 1,
+Phase 2, …). Use the **Phase** spinbox to switch between phases. Each phase stores
+its own crystal source, structure, element, and lattice parameters independently.
+
+For phases > 0, assign which grains use this crystal:
+- **Fraction**: decimal fraction of total grains (e.g. `0.3` = 30%)
+- **Grain List**: comma-separated grain IDs with formula support:
+  - `2n` — all even-index grains (0, 2, 4, …)
+  - `2n+1` — all odd-index grains (1, 3, 5, …)
+  - `d < 20`, `d > 50`, `d <= X`, `d >= X` — filter by grain diameter
+  - `1,3,5-8` — explicit IDs and ranges
+  - Combine: `2n, 5, d<30`
+
+Phase 0 (the matrix) automatically gets all remaining unassigned grains. Atom type
+IDs are continuous across phases (Phase 0 types start at 1, Phase 1 types continue
+from Phase 0's maximum type ID, etc.).
+
+Saving pristine crystals in multi-phase mode writes `{name}.0.crystal`,
+`{name}.1.crystal`, etc.
+
 The `a` → `c` ratio is auto-filled for hexagonal structures (c/a ≈ 1.633).
 
 ### 5. Choose Orientation Mode

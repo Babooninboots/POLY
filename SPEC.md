@@ -101,6 +101,13 @@ centered at the origin.
      spacegroup number, and cell parameters.
    - **Custom** — loads `.cif`, `.crystal`, or any ASE-readable file.
 
+   **Multi-phase:** Multiple crystal structures can be defined via
+   `phase_configs = {0: {…}, 1: {…, "fraction": 0.3}, …}`.
+   Grains are assigned to phases by explicit grain-ID lists, fraction
+   sampling, or formula (``2n``, ``2n+1``, ``d < X``).  Phase 0 gets
+   all unassigned grains.  Atom type IDs are globally continuous across
+   phases via offset accumulation.  See ``assign_grain_phases()``.
+
 2. **Supercell Construction**
    Replicates the unit cell to cover `coverage` (default: 2× max box diagonal
    for assembly pre-crop headroom), plus a `margin` of extra replicas.

@@ -60,6 +60,24 @@ def _get_mass(symbol: str) -> float:
 
 
 # ---------------------------------------------------------------------------
+# Multi-phase crystal info
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class PhaseCrystalInfo:
+    """Crystal data for one phase in a multi-phase build."""
+
+    positions: np.ndarray          # (n, 3) Cartesian coordinates
+    types: np.ndarray              # (n,) local 1-based type IDs (within phase)
+    symbols: np.ndarray            # (n,) element symbol strings
+    symbol_to_type: dict[str, int]
+    type_to_symbol: dict[int, str]
+    type_masses: dict[int, float]
+    n_atoms: int
+
+
+# ---------------------------------------------------------------------------
 # Per-grain worker (module-level so it's pickleable)
 # ---------------------------------------------------------------------------
 
@@ -175,7 +193,7 @@ class PolycrystalAssembly:
     def __init__(
         self,
         seeds: np.ndarray,
-        crystal_atoms,           # ase.Atoms
+        crystal_atoms,           # ase.Atoms or dict[int, ase.Atoms]
         orientations,            # OrientationResult
         box_start,
         box_end,
@@ -187,10 +205,10 @@ class PolycrystalAssembly:
         poly_data: list | None = None,
         is_columnar: bool = False,
         max_grain_z: float | None = None,
+        grain_phases: np.ndarray | None = None,
     ):
         self.seeds = np.asarray(seeds, dtype=float)
         self.n_grains = len(self.seeds)
-        self.crystal = crystal_atoms
         self.orientations = orientations
         self.box_start = np.asarray(box_start, dtype=float)
         self.box_end = np.asarray(box_end, dtype=float)
@@ -210,26 +228,92 @@ class PolycrystalAssembly:
                 f"({len(self.orientations.rotation_matrices)})"
             )
 
-        self._crystal_positions = self.crystal.get_positions()
-        self._crystal_symbols = np.array(self.crystal.get_chemical_symbols())
+        # Detect multi-phase
+        if isinstance(crystal_atoms, dict):
+            self._is_multiphase = True
+            self._grain_phases = np.asarray(grain_phases, dtype=int)
+            if len(self._grain_phases) != self.n_grains:
+                raise ValueError(
+                    f"grain_phases length ({len(self._grain_phases)}) "
+                    f"!= n_grains ({self.n_grains})"
+                )
+            self._build_phase_info(crystal_atoms)
+            self._compute_global_type_offsets()
+            # Set phase-0 crystal data for backward-compat attribute references
+            self.crystal = crystal_atoms.get(0)
+            info0 = self._phase_info[0]
+            self._crystal_positions = info0.positions
+            self._crystal_symbols = info0.symbols
+            self._type_to_symbol = info0.type_to_symbol
+            self._type_masses = info0.type_masses
+            self._crystal_types = info0.types
+            self._n_atoms_per_copy = len(self._crystal_positions)
+        else:
+            self._is_multiphase = False
+            self._grain_phases = None
+            self.crystal = crystal_atoms
+            self._crystal_positions = self.crystal.get_positions()
+            self._crystal_symbols = np.array(self.crystal.get_chemical_symbols())
 
-        unique = sorted(set(self._crystal_symbols))
-        self._symbol_to_type = {sym: i + 1 for i, sym in enumerate(unique)}
-        self._type_to_symbol = {i + 1: sym for i, sym in enumerate(unique)}
-        self._type_masses = {
-            tid: _get_mass(sym) for tid, sym in self._type_to_symbol.items()
-        }
-        self._crystal_types = np.array(
-            [self._symbol_to_type[s] for s in self._crystal_symbols], dtype=int
-        )
+            unique = sorted(set(self._crystal_symbols))
+            self._symbol_to_type = {sym: i + 1 for i, sym in enumerate(unique)}
+            self._type_to_symbol = {i + 1: sym for i, sym in enumerate(unique)}
+            self._type_masses = {
+                tid: _get_mass(sym) for tid, sym in self._type_to_symbol.items()
+            }
+            self._crystal_types = np.array(
+                [self._symbol_to_type[s] for s in self._crystal_symbols], dtype=int
+            )
         self._n_atoms_per_copy = len(self._crystal_positions)
 
         # Set after assemble()
         self._positions: np.ndarray | None = None
+
+    def _build_phase_info(self, crystal_atoms: dict) -> None:
+        """Build PhaseCrystalInfo for each phase in a multi-phase build."""
+        self._phase_info: dict[int, PhaseCrystalInfo] = {}
+        for phase_idx, atoms in crystal_atoms.items():
+            positions = atoms.get_positions()
+            symbols = np.array(atoms.get_chemical_symbols())
+            unique = sorted(set(symbols))
+            symbol_to_type = {sym: i + 1 for i, sym in enumerate(unique)}
+            type_to_symbol = {i + 1: sym for i, sym in enumerate(unique)}
+            type_masses = {tid: _get_mass(sym)
+                          for tid, sym in type_to_symbol.items()}
+            types = np.array([symbol_to_type[s] for s in symbols], dtype=int)
+            self._phase_info[phase_idx] = PhaseCrystalInfo(
+                positions=positions, types=types, symbols=symbols,
+                symbol_to_type=symbol_to_type, type_to_symbol=type_to_symbol,
+                type_masses=type_masses, n_atoms=len(positions),
+            )
+
+    def _compute_global_type_offsets(self) -> None:
+        """Compute continuous type IDs across all phases with offset accumulation."""
+        offset = 0
+        self._global_offsets: dict[int, int] = {}
+        self._merged_type_to_symbol: dict[int, str] = {}
+        self._merged_type_masses: dict[int, float] = {}
+        for phase_idx in sorted(self._phase_info.keys()):
+            self._global_offsets[phase_idx] = offset
+            info = self._phase_info[phase_idx]
+            for local_tid, sym in info.type_to_symbol.items():
+                global_tid = offset + local_tid
+                self._merged_type_to_symbol[global_tid] = sym
+                self._merged_type_masses[global_tid] = info.type_masses[local_tid]
+            offset += len(info.type_to_symbol)
         self._types: np.ndarray | None = None
         self._grain_ids: np.ndarray | None = None
         self._euler_per_atom: np.ndarray | None = None
         self._n_total: int = 0
+
+    def _get_grain_crystal(self, g: int) -> tuple[np.ndarray, np.ndarray]:
+        """Return (positions, types) for grain *g*, with global type offsets."""
+        if not self._is_multiphase:
+            return self._crystal_positions, self._crystal_types
+        pi = self._grain_phases[g]
+        info = self._phase_info[pi]
+        return (info.positions,
+                info.types + self._global_offsets[pi])
 
     # ------------------------------------------------------------------
     # Assembly
@@ -493,8 +577,7 @@ class PolycrystalAssembly:
 
                 _tasks = [
                     (g,
-                     self._crystal_positions,
-                     self._crystal_types,
+                     *(self._get_grain_crystal(g)),
                      float(pre_crop_radii[g]),
                      rotation_matrices[g],
                      best_seeds[g],
@@ -549,8 +632,9 @@ class PolycrystalAssembly:
 
             else:
                 for g in range(self.n_grains):
+                    _cpos, _ctyp = self._get_grain_crystal(g)
                     dists_from_origin = np.linalg.norm(
-                        self._crystal_positions, axis=1,
+                        _cpos, axis=1,
                     )
                     crop_mask = dists_from_origin <= pre_crop_radii[g]
                     n_crop = int(crop_mask.sum())
@@ -564,10 +648,10 @@ class PolycrystalAssembly:
 
                     R = Rotation.from_matrix(rotation_matrices[g])
                     pos_crop = (
-                        R.apply(self._crystal_positions[crop_mask])
+                        R.apply(_cpos[crop_mask])
                         + best_seeds[g]
                     )
-                    typ_crop = self._crystal_types[crop_mask]
+                    typ_crop = _ctyp[crop_mask]
 
                     if radii_all is not None:
                         k_kd = min(30, n_seeds)
@@ -706,13 +790,17 @@ class PolycrystalAssembly:
         if self._positions is None:
             raise RuntimeError("No assembly data; call assemble() first.")
 
+        _type_to_sym = (self._merged_type_to_symbol if self._is_multiphase
+                        else self._type_to_symbol)
+        _type_m = (self._merged_type_masses if self._is_multiphase
+                   else self._type_masses)
         header = self._lammps_data_header(
             self._n_total,
-            len(self._type_to_symbol),
+            len(_type_to_sym),
             self.box_start,
             self.box_end,
         )
-        masses = self._lammps_masses_block(self._type_masses)
+        masses = self._lammps_masses_block(_type_m)
         atoms = self._lammps_atoms_block(self._positions, self._types)
 
         with open(filepath, "w") as fh:
@@ -829,9 +917,15 @@ class PolycrystalAssembly:
             types=types,
             grain_ids=grain_ids,
             euler_per_atom=euler_per_atom,
-            symbols=list(self._type_to_symbol.values()),
-            type_to_symbol=dict(self._type_to_symbol),
-            type_masses=dict(self._type_masses),
+            symbols=(list(self._merged_type_to_symbol.values())
+                     if self._is_multiphase
+                     else list(self._type_to_symbol.values())),
+            type_to_symbol=(dict(self._merged_type_to_symbol)
+                           if self._is_multiphase
+                           else dict(self._type_to_symbol)),
+            type_masses=(dict(self._merged_type_masses)
+                        if self._is_multiphase
+                        else dict(self._type_masses)),
             n_grains=self.n_grains,
             n_atoms=self._n_total,
             box_start=self.box_start.copy(),
@@ -859,6 +953,7 @@ def assemble_polycrystal(
     poly_data: list | None = None,
     is_columnar: bool = False,
     max_grain_z: float | None = None,
+    grain_phases: np.ndarray | None = None,
     data_path: str | None = None,
     dump_path: str | None = None,
     batch_size: int = 50000,
@@ -879,6 +974,7 @@ def assemble_polycrystal(
         poly_data=poly_data,
         is_columnar=is_columnar,
         max_grain_z=max_grain_z,
+        grain_phases=grain_phases,
     )
     return assembler.run(
         data_path=data_path,

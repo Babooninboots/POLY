@@ -266,10 +266,11 @@ class SeedGenerationWorker(QThread):
 class CrystalGenerationWorker(QThread):
     """Runs pristine-crystal generation off the main thread.
 
-    Emits ``finished(ase.Atoms)`` on success or ``error(str)`` on failure.
+    Emits ``finished_crystal(ase.Atoms, phase_index)`` on success or
+    ``error_crystal(str)`` on failure.
     """
 
-    finished_crystal = Signal(object)  # ase.Atoms
+    finished_crystal = Signal(object, int)  # (atoms, phase_index)
     error_crystal = Signal(str)
 
     def __init__(
@@ -290,6 +291,7 @@ class CrystalGenerationWorker(QThread):
         custom_file: str,
         box_start: tuple[float, float, float],
         box_end: tuple[float, float, float],
+        phase_index: int = 0,
         parent=None,
     ):
         super().__init__(parent)
@@ -309,6 +311,7 @@ class CrystalGenerationWorker(QThread):
         self._custom_file = custom_file
         self._box_start = box_start
         self._box_end = box_end
+        self._phase_index = phase_index
 
     def run(self) -> None:
         try:
@@ -392,6 +395,7 @@ class CrystalGenerationWorker(QThread):
                 if self._custom_file.lower().endswith(".crystal"):
                     self.finished_crystal.emit(
                         _load_crystal_file(self._custom_file),
+                        self._phase_index,
                     )
                     return
                 pc = PristineCrystal.from_cif(
@@ -402,7 +406,7 @@ class CrystalGenerationWorker(QThread):
             # Store the true unit-cell vectors so the viewport wireframe
             # draws a single conventional cell, not the 2x2x2 preview box.
             preview_atoms.info["_unit_cell"] = pc.unit_cell.get_cell()[:]
-            self.finished_crystal.emit(preview_atoms)
+            self.finished_crystal.emit(preview_atoms, self._phase_index)
 
         except Exception as exc:
             self.error_crystal.emit(str(exc))
@@ -580,6 +584,9 @@ class PolycrystalBuildWorker(QThread):
         dump_path: str,
         hkl: tuple | None = None,
         distribution: str = "random",
+        crystal_atoms: dict | None = None,
+        grain_phases: np.ndarray | None = None,
+        phase_configs: dict | None = None,
         parent=None,
     ):
         super().__init__(parent)
@@ -591,6 +598,9 @@ class PolycrystalBuildWorker(QThread):
         self._dump_path = dump_path
         self._hkl = hkl
         self._distribution = distribution
+        self._crystal_atoms = crystal_atoms
+        self._grain_phases = grain_phases
+        self._phase_configs = phase_configs
 
     def run(self) -> None:
         try:
@@ -639,21 +649,50 @@ class PolycrystalBuildWorker(QThread):
                 print(f"[Build] No grain diagonals; "
                       f"safe coverage = {safe_coverage:.1f} A")
 
-            # Step A: full crystal supercell
-            full_crystal = _generate_full_crystal(
-                self._crystal_source, self._crystal_params,
-                coverage=safe_coverage,
-            )
+            # Step A: full crystal supercell(s)
+            if (self._phase_configs and len(self._phase_configs) > 1
+                    and self._grain_phases is not None):
+                # Multi-phase: generate per distinct phase, pass dict
+                import json
+                phase_full_crystals: dict[int, object] = {}
+                generated_cache: dict[int, object] = {}
+                for phase_idx, cfg in sorted(self._phase_configs.items()):
+                    if phase_idx in self._crystal_atoms:
+                        # Use preview crystal if available (same atoms, just
+                        # re-supercell it)
+                        pass
+                    h = hash(json.dumps({
+                        "src": cfg.get("crystal_source", 0),
+                        "params": {k: v for k, v in
+                                   cfg.get("crystal_params", {}).items()
+                                   if k not in ("coverage", "box_start", "box_end")},
+                    }, sort_keys=True))
+                    if h in generated_cache:
+                        phase_full_crystals[phase_idx] = generated_cache[h]
+                    else:
+                        fc = _generate_full_crystal(
+                            cfg["crystal_source"], cfg["crystal_params"],
+                            coverage=safe_coverage,
+                        )
+                        phase_full_crystals[phase_idx] = fc
+                        generated_cache[h] = fc
+                crystal_input = phase_full_crystals
+            else:
+                crystal_input = _generate_full_crystal(
+                    self._crystal_source, self._crystal_params,
+                    coverage=safe_coverage,
+                )
 
             # Step B: polycrystal assembly
             result = assemble_polycrystal(
                 seeds=sr.seeds,
-                crystal_atoms=full_crystal,
+                crystal_atoms=crystal_input,
                 orientations=self._orientation_result,
                 box_start=sr.box_start,
                 box_end=sr.box_end,
                 target_radii=sr.target_radii,
                 grain_diagonals=individual_diags,
+                grain_phases=self._grain_phases,
                 is_laminate=is_laminate,
                 hkl=self._hkl,
                 poly_data=poly_data,

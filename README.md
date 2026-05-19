@@ -138,6 +138,12 @@ box volume and a spherical-equivalent-diameter model.
 
 The `a` → `c` ratio is auto-filled for hexagonal structures (c/a ≈ 1.633).
 
+**Multi-Phase:** Click **ADD CRYSTAL** to create multiple crystal phases. Each phase
+has independent structure/element/lattice params. Use the **Phase** spinbox to switch.
+For phases > 0, assign grains by **Fraction** or **Grain List** (supports formulas:
+`2n`, `2n+1`, `d<20`). Phase 0 gets remaining grains. Atom type IDs are continuous
+across phases.
+
 ### 5. Choose Orientation Mode
 
 | Mode | Description | Extra Fields |

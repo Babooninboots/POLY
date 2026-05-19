@@ -151,6 +151,157 @@ _ELEM_STRUCTURE: dict[str, tuple[str, float, float]] = {
 
 
 # ---------------------------------------------------------------------------
+# Multi-phase helpers
+# ---------------------------------------------------------------------------
+
+
+def parse_grain_list(
+    raw: str,
+    n_grains: int | None = None,
+    diameters: np.ndarray | None = None,
+) -> list[int]:
+    """Parse a comma-separated grain-ID list with range and formula support.
+
+    Supported syntax:
+      ``"1,3,5-8"`` — explicit IDs and ranges
+      ``"2n"`` — even-indexed grains (0, 2, 4, …)
+      ``"2n+1"`` — odd-indexed grains (1, 3, 5, …)
+      ``"d < 20"``, ``"d > 50"``, ``"d <= X"``, ``"d >= X"`` — filter by diameter
+
+    *n_grains* and *diameters* are required for formula evaluation.
+    """
+    result: list[int] = []
+    if not raw.strip():
+        return result
+    if n_grains is None:
+        n_grains = 0
+
+    for part in raw.split(","):
+        part = part.strip().lower()
+        if not part:
+            continue
+
+        # Formula: 2n (even indices)
+        if part == "2n":
+            result.extend(range(0, n_grains, 2))
+            continue
+        # Formula: 2n+1 (odd indices)
+        if part in ("2n+1", "2n+1"):
+            result.extend(range(1, n_grains, 2))
+            continue
+
+        # Formula: d < X, d > X, d <= X, d >= X
+        _dm = _DIAM_RE.match(part)
+        if _dm:
+            op = _dm.group("op")
+            val = float(_dm.group("val"))
+            if diameters is not None and len(diameters) > 0:
+                if op in ("<", "<="):
+                    mask = diameters <= val if op == "<=" else diameters < val
+                else:
+                    mask = diameters >= val if op == ">=" else diameters > val
+                result.extend(int(i) for i, m in enumerate(mask) if m)
+            continue
+
+        # Standard: single ID or range
+        if "-" in part:
+            lo_str, hi_str = part.split("-", 1)
+            lo, hi = int(lo_str.strip()), int(hi_str.strip())
+            result.extend(range(lo, hi + 1))
+        else:
+            try:
+                result.append(int(part))
+            except ValueError:
+                pass  # skip unrecognized tokens
+
+    return sorted(set(result))
+
+
+import re as _re
+_DIAM_RE = _re.compile(
+    r"^d\s*(?P<op>[<>]=?)\s*(?P<val>[0-9]+(?:\.[0-9]*)?)$"
+)
+
+
+def assign_grain_phases(
+    n_grains: int,
+    phase_configs: dict[int, dict],
+    diameters: np.ndarray | None = None,
+) -> np.ndarray:
+    """Assign each grain to a crystal phase based on user configuration.
+
+    1. Init all grains to -1 (unassigned).
+    2. Assign phases with explicit grain-ID lists directly (formulas evaluated
+       with *n_grains* and *diameters*).
+    3. Randomly sample fractions from remaining unassigned grains.
+    4. Assign all leftovers to phase 0 (the residue/matrix).
+    """
+    grain_phases = np.full(n_grains, -1, dtype=int)
+    assigned: set[int] = set()
+
+    nonzero_phases = sorted(p for p in phase_configs if p > 0)
+
+    # Step 1: explicit grain lists (with formula support)
+    for phase_idx in nonzero_phases:
+        cfg = phase_configs.get(phase_idx, {})
+        # Parse raw formula string if present
+        raw = cfg.get("grain_list_raw")
+        if raw:
+            gids = parse_grain_list(raw, n_grains=n_grains, diameters=diameters)
+        else:
+            gids = cfg.get("grain_ids")
+        if gids and isinstance(gids, list):
+            for gid in gids:
+                if 0 <= gid < n_grains and gid not in assigned:
+                    grain_phases[gid] = phase_idx
+                    assigned.add(gid)
+
+    # Step 2: fractions
+    remaining = [g for g in range(n_grains) if g not in assigned]
+    rng = np.random.default_rng()
+
+    for phase_idx in nonzero_phases:
+        cfg = phase_configs.get(phase_idx, {})
+        frac = cfg.get("fraction", 0.0)
+        if frac > 0 and len(remaining) > 0:
+            n_phase = max(1, int(round(frac * n_grains)))
+            n_phase = min(n_phase, len(remaining))
+            chosen = rng.choice(remaining, size=n_phase, replace=False)
+            for gid in chosen:
+                grain_phases[gid] = phase_idx
+                assigned.add(gid)
+            remaining = [g for g in range(n_grains) if g not in assigned]
+
+    # Step 3: leftovers to phase 0
+    for gid in range(n_grains):
+        if grain_phases[gid] < 0:
+            grain_phases[gid] = 0
+
+    return grain_phases
+
+
+def _dedup_phase_configs(phase_configs: dict[int, dict]) -> dict[int, dict]:
+    """Group phases by identical crystal config; return only distinct entries.
+
+    The key for each phase is the lowest index sharing its crystal params.
+    """
+    import json
+    result: dict[int, dict] = {}
+    seen: dict[int, int] = {}  # hash -> lowest phase_idx
+    for idx in sorted(phase_configs):
+        cfg = phase_configs[idx]
+        h = hash(json.dumps({
+            "src": cfg.get("crystal_source", 0),
+            "params": {k: v for k, v in cfg.get("crystal_params", {}).items()
+                       if k not in ("coverage", "box_start", "box_end")},
+        }, sort_keys=True))
+        if h not in seen:
+            seen[h] = idx
+            result[idx] = cfg
+    return result
+
+
+# ---------------------------------------------------------------------------
 # Main Window
 # ---------------------------------------------------------------------------
 
@@ -218,6 +369,9 @@ class MainWindow(QMainWindow):
         for _sb2 in (dock.dist_bim_frac, dock.dist_bim_m1, dock.dist_bim_s1,
                      dock.dist_bim_m2, dock.dist_bim_s2):
             _sb2.valueChanged.connect(self._on_bimodal_params_changed)
+        # Multi-phase signals
+        dock.phase_changed.connect(self._on_phase_index_changed)
+        dock.add_crystal_clicked.connect(self._on_add_crystal_clicked)
         self._laminate_z_tune_lock = False
         self._update_csl_angle()
         self._seed_worker: SeedGenerationWorker | None = None
@@ -238,6 +392,12 @@ class MainWindow(QMainWindow):
         self._crystal_source: int = 0
         self._crystal_params: dict = {}
         self._crystal_system: str | None = None  # detected from ASE atoms
+        # Multi-phase support
+        self._phase_configs: dict[int, dict] = {0: {}}
+        self._current_phase_index: int = 0
+        self._crystal_atoms: dict[int, object] = {}  # phase_idx -> ase.Atoms
+        self._grain_phases: np.ndarray | None = None
+        self._phase_atoms_pending: int = 0
         # grain editor edit cache
         self._edit_cache: dict[int, dict[str, float]] = {}
         self._current_grain_id: int = -1
@@ -312,6 +472,9 @@ class MainWindow(QMainWindow):
             bimodal_params = (frac, m1, s1, m2, s2)
 
         # --- crystal source & params (needed early for laminate d_hkl) ---
+        # Save current phase config before extracting crystal params
+        self._save_current_phase_config()
+
         crystal_source = dock.crystal_combo.currentIndex()
         box_start_arr = np.array(box_start, dtype=float)
         box_end_arr = np.array(box_end, dtype=float)
@@ -402,21 +565,29 @@ class MainWindow(QMainWindow):
 
         seeds_changed = self._seed_result is None or current_seed_params != self._last_seed_params
         ori_changed = self._orientation_result is None or current_ori_params != self._last_ori_params
-        crystal_changed = self._crystal_atoms is None or current_crystal_params != self._last_crystal_params
+        crystal_changed = (not self._crystal_atoms
+                           or current_crystal_params != self._last_crystal_params)
 
         if not (seeds_changed or ori_changed or crystal_changed):
-            # Nothing changed — nothing to do
             return
 
         run_seeds = seeds_changed
         run_ori = ori_changed or seeds_changed
         run_crystal = crystal_changed
+        is_multi = len(self._phase_configs) > 1
+
+        # For multi-phase, defer crystal generation until seeds complete
+        # so we know n_grains for phase assignment
+        if is_multi and run_crystal:
+            run_crystal = False
+            self._pending_multiphase_crystal = True
+        else:
+            self._pending_multiphase_crystal = False
 
         self._last_seed_params = current_seed_params
         self._last_ori_params = current_ori_params
         self._last_crystal_params = current_crystal_params
 
-        # Track what ran so _render_all only updates what changed
         self._render_seeds = run_seeds or run_ori
         self._render_crystal = run_crystal
 
@@ -528,8 +699,10 @@ class MainWindow(QMainWindow):
                         target_miso_angles=miso_target,
                     )
                     # Also render crystal structure if already generated
-                    if self._crystal_atoms is not None:
-                        self._render_crystal_viewport(self._crystal_atoms)
+                    if self._crystal_atoms:
+                        atoms0 = self._crystal_atoms.get(0)
+                        if atoms0 is not None:
+                            self._render_crystal_viewport(atoms0)
                 QApplication.processEvents()
             else:
                 self.settings_dock.pause_btn.setText("Pause")
@@ -572,8 +745,14 @@ class MainWindow(QMainWindow):
                 target_size_params=size_target,
                 target_miso_angles=miso_target,
             )
-        if self._render_crystal and self._crystal_atoms is not None:
-            self._render_crystal_viewport(self._crystal_atoms)
+        if self._render_crystal and self._crystal_atoms:
+            phase_idx = self._current_phase_index
+            atoms = self._crystal_atoms.get(phase_idx)
+            if atoms is None:
+                atoms = next(iter(self._crystal_atoms.values()))
+                phase_idx = next(iter(self._crystal_atoms.keys()))
+            label = f"Phase {phase_idx}" if len(self._crystal_atoms) > 1 else None
+            self._render_crystal_viewport(atoms, label)
         self._render_seeds = False
         self._render_crystal = False
 
@@ -679,6 +858,33 @@ class MainWindow(QMainWindow):
         dock.box_max_x.blockSignals(False)
         dock.box_max_y.blockSignals(False)
         dock.box_max_z.blockSignals(False)
+
+        # --- Multi-phase crystal generation ---
+        if getattr(self, "_pending_multiphase_crystal", False):
+            self._pending_multiphase_crystal = False
+            self._grain_phases = assign_grain_phases(
+                seed_result.n_grains, self._phase_configs,
+                diameters=seed_result.diameters,
+            )
+            distinct = _dedup_phase_configs(self._phase_configs)
+            self._phase_atoms_pending = len(distinct)
+            self._phase_workers: list[CrystalGenerationWorker] = []
+            for phase_idx, cfg in distinct.items():
+                worker = CrystalGenerationWorker(
+                    crystal_source=cfg["crystal_source"],
+                    phase_index=phase_idx,
+                    **{k: v for k, v in cfg["crystal_params"].items()
+                       if k != "coverage"},
+                )
+                worker.finished_crystal.connect(self._on_phase_crystal_finished)
+                worker.error_crystal.connect(self._on_crystal_error)
+                self._phase_workers.append(worker)
+                worker.start()
+            self.statusBar().showMessage(
+                f"Generated {seed_result.n_grains} grains. "
+                f"Generating {self._phase_atoms_pending} crystal phases…", 3000
+            )
+            return  # defer _worker_done to _on_phase_crystal_finished
 
         self._worker_done()
         self.statusBar().showMessage(
@@ -871,9 +1077,9 @@ class MainWindow(QMainWindow):
         print(f"[GUI] Seed generation error: {error_msg}")
         self._worker_done()
 
-    def _on_crystal_finished(self, atoms) -> None:
+    def _on_crystal_finished(self, atoms, phase_index: int = 0) -> None:
         """Store crystal atoms; render deferred to _render_all."""
-        self._crystal_atoms = atoms
+        self._crystal_atoms[phase_index] = atoms
         self.central.save_btn.setEnabled(True)
 
         # push cell params from loaded .crystal file back to GUI spinboxes
@@ -900,10 +1106,25 @@ class MainWindow(QMainWindow):
         """Handle crystal-generation failure and still count for completion."""
         self.statusBar().showMessage(f"Crystal error: {error_msg}", 8000)
         print(f"[GUI] Crystal generation error: {error_msg}")
-        self._crystal_atoms = None
+        self._crystal_atoms.clear()
         self._worker_done()
 
-    def _render_crystal_viewport(self, atoms) -> None:
+    def _on_phase_crystal_finished(self, atoms, phase_index: int) -> None:
+        """Store per-phase crystal; trigger render when all phases complete."""
+        self._crystal_atoms[phase_index] = atoms
+        self._phase_atoms_pending -= 1
+
+        if self._phase_atoms_pending <= 0:
+            self.central.save_btn.setEnabled(True)
+            # Detect crystal system from phase 0
+            from orientation import symmetry_from_atoms
+            phase0 = self._crystal_atoms.get(0)
+            if phase0 is not None:
+                self._crystal_system = symmetry_from_atoms(phase0)
+            self._render_crystal = True
+            self._worker_done()
+
+    def _render_crystal_viewport(self, atoms, phase_label: str | None = None) -> None:
         """Render pristine crystal atoms in the top-right viewport."""
         plotter = self.central.crystal_plotter
         plotter.clear()
@@ -954,6 +1175,9 @@ class MainWindow(QMainWindow):
         plotter.add_mesh(box_lines, color="black", line_width=2)
 
         plotter.add_axes()
+        if phase_label:
+            plotter.add_text(phase_label, position="upper_right",
+                           font_size=14, color="black")
         plotter.view_isometric()
         plotter.reset_camera()
 
@@ -1163,6 +1387,147 @@ class MainWindow(QMainWindow):
         dock.qty_spin.blockSignals(False)
         dock.qty_diam_spin.blockSignals(False)
 
+    # ------------------------------------------------------------------
+    # Multi-phase crystal management
+    # ------------------------------------------------------------------
+
+    def _save_current_phase_config(self) -> None:
+        """Serialize current GUI crystal inputs to self._phase_configs."""
+        dock = self.settings_dock
+        idx = self._current_phase_index
+        crystal_source = dock.crystal_combo.currentIndex()
+        crystal_params = dict(
+            single_structure=dock.crystal_type_combo.currentText().strip(),
+            single_element=dock.crystal_elem_edit.text().strip(),
+            single_a=dock.crystal_shared_a.value(),
+            single_c=dock.crystal_shared_c.value(),
+            inter_type=dock.crystal_type_combo.currentText().strip(),
+            inter_elements=dock.crystal_elem_edit.text().strip(),
+            inter_a=dock.crystal_shared_a.value(),
+            inter_c=dock.crystal_shared_c.value(),
+            sg_elements=dock.crystal_sg_elements.text().strip(),
+            sg_basis=dock.crystal_sg_basis.text().strip(),
+            sg_spacegroup=dock.crystal_sg_group.text().strip(),
+            sg_cellpar=dock.crystal_sg_cellpar.text().strip(),
+            custom_file=dock.crystal_custom_picker.path,
+            box_start=(dock.box_min_x.value(), dock.box_min_y.value(), dock.box_min_z.value()),
+            box_end=(dock.box_max_x.value(), dock.box_max_y.value(), dock.box_max_z.value()),
+        )
+        cfg = dict(crystal_source=crystal_source, crystal_params=crystal_params)
+        if idx > 0:
+            if dock.phase_assign_mode.currentIndex() == 0:
+                cfg["fraction"] = dock.phase_fraction_spin.value()
+                cfg.pop("grain_ids", None)
+                cfg.pop("grain_list_raw", None)
+            else:
+                raw = dock.phase_grain_list_edit.text().strip()
+                cfg["grain_list_raw"] = raw if raw else None
+                cfg.pop("fraction", None)
+        self._phase_configs[idx] = cfg
+
+    def _load_phase_config(self, phase_index: int) -> None:
+        """Deserialize self._phase_configs[phase_index] into GUI form fields."""
+        dock = self.settings_dock
+        cfg = self._phase_configs.get(phase_index, {})
+        if not cfg:
+            return
+
+        cs = cfg.get("crystal_source", 0)
+        cp = cfg.get("crystal_params", {})
+
+        dock.crystal_combo.blockSignals(True)
+        dock.crystal_combo.setCurrentIndex(cs)
+        dock.crystal_combo.blockSignals(False)
+
+        dock.crystal_type_combo.blockSignals(True)
+        dock.crystal_type_combo.setCurrentText(
+            cp.get("single_structure", cp.get("inter_type", ""))
+        )
+        dock.crystal_type_combo.blockSignals(False)
+
+        dock.crystal_elem_edit.blockSignals(True)
+        dock.crystal_elem_edit.setText(
+            cp.get("single_element", cp.get("inter_elements", ""))
+        )
+        dock.crystal_elem_edit.blockSignals(False)
+
+        dock.crystal_shared_a.blockSignals(True)
+        dock.crystal_shared_c.blockSignals(True)
+        dock.crystal_shared_a.setValue(
+            cp.get("single_a", cp.get("inter_a", 3.0))
+        )
+        dock.crystal_shared_c.setValue(
+            cp.get("single_c", cp.get("inter_c", 3.0))
+        )
+        dock.crystal_shared_a.blockSignals(False)
+        dock.crystal_shared_c.blockSignals(False)
+
+        dock.crystal_sg_elements.setText(cp.get("sg_elements", ""))
+        dock.crystal_sg_basis.setText(cp.get("sg_basis", ""))
+        dock.crystal_sg_group.setText(cp.get("sg_spacegroup", ""))
+        dock.crystal_sg_cellpar.setText(cp.get("sg_cellpar", ""))
+
+        if cp.get("custom_file"):
+            dock.crystal_custom_picker.path_edit.setText(cp["custom_file"])
+
+        # Show/hide assignment row
+        if phase_index > 0:
+            dock.phase_assign_stack.setCurrentIndex(1)
+            if "grain_ids" in cfg or "grain_list_raw" in cfg:
+                dock.phase_assign_mode.setCurrentIndex(1)
+                raw = cfg.get("grain_list_raw")
+                if raw:
+                    dock.phase_grain_list_edit.setText(raw)
+                elif "grain_ids" in cfg:
+                    dock.phase_grain_list_edit.setText(
+                        ",".join(str(g) for g in cfg["grain_ids"])
+                    )
+            else:
+                dock.phase_assign_mode.setCurrentIndex(0)
+                dock.phase_fraction_spin.setValue(cfg.get("fraction", 0.0))
+            dock._on_phase_assign_mode_changed(
+                dock.phase_assign_mode.currentIndex()
+            )
+        else:
+            dock.phase_assign_stack.setCurrentIndex(0)
+
+    def _on_phase_index_changed(self, index: int) -> None:
+        """Save current, load new, switch crystal preview."""
+        self._save_current_phase_config()
+        self._current_phase_index = index
+        self._load_phase_config(index)
+        if self._crystal_atoms:
+            atoms = self._crystal_atoms.get(index)
+            if atoms is not None:
+                self._render_crystal_viewport(atoms, f"Phase {index}")
+            else:
+                atoms0 = self._crystal_atoms.get(0)
+                if atoms0 is not None:
+                    self._render_crystal_viewport(atoms0, "Phase 0")
+
+    def _on_add_crystal_clicked(self) -> None:
+        """Deep-copy current phase config to a new phase index."""
+        self._save_current_phase_config()
+        new_idx = max(self._phase_configs.keys()) + 1
+        import copy
+        self._phase_configs[new_idx] = copy.deepcopy(
+            self._phase_configs[self._current_phase_index]
+        )
+        self._phase_configs[new_idx]["fraction"] = 0.0
+        self._phase_configs[new_idx].pop("grain_ids", None)
+
+        dock = self.settings_dock
+        dock.phase_index_spin.blockSignals(True)
+        dock.phase_index_spin.setRange(0, new_idx)
+        dock.phase_index_spin.setValue(new_idx)
+        dock.phase_index_spin.blockSignals(False)
+
+        self._current_phase_index = new_idx
+        self._load_phase_config(new_idx)
+        self.statusBar().showMessage(
+            f"Added Phase {new_idx}", 3000
+        )
+
     def _on_crystal_element_changed(self, text: str) -> None:
         """Auto-fill structure and lattice params for known elements (Bravais only)."""
         dock = self.settings_dock
@@ -1222,6 +1587,8 @@ class MainWindow(QMainWindow):
             sg_spacegroup=dock.crystal_sg_group.text().strip(),
             sg_cellpar=dock.crystal_sg_cellpar.text().strip(),
             custom_file=dock.crystal_custom_picker.path,
+            box_start=(dock.box_min_x.value(), dock.box_min_y.value(), dock.box_min_z.value()),
+            box_end=(dock.box_max_x.value(), dock.box_max_y.value(), dock.box_max_z.value()),
         )
 
         self._laminate_z_tune_lock = True
@@ -1577,13 +1944,14 @@ class MainWindow(QMainWindow):
     # Other placeholder slots
     # ------------------------------------------------------------------
 
-    def _crystal_system_from_gui(dock) -> str | None:
+    def _crystal_system_from_gui(self) -> str | None:
         """Detect crystal system from the current GUI state."""
         from orientation import get_crystal_symmetry
+        dock = self.settings_dock
         src = dock.crystal_combo.currentIndex()
-        if src in (0, 1):  # Bravais or Intermetallics
+        if src in (0, 1):
             return get_crystal_symmetry(dock.crystal_type_combo.currentText().strip())
-        if src == 2:  # Spacegroup
+        if src == 2:
             try:
                 sg = int(dock.crystal_sg_group.text().strip())
                 return get_crystal_symmetry(spacegroup=sg)
@@ -1592,26 +1960,48 @@ class MainWindow(QMainWindow):
         return None
 
     def _on_save(self) -> None:
-        """Save lattice point coordinates as {Name}.crystal."""
-        if self._crystal_atoms is None:
+        """Save lattice point coordinates as {Name}.crystal (or {Name}.N.crystal)."""
+        if not self._crystal_atoms:
             self.statusBar().showMessage("No crystal to save.", 3000)
             return
 
+        name = self.central.out_name_edit.text().strip()
+        from orientation import symmetry_from_atoms
+
+        # Multi-phase: save each phase as {name}.{N}.crystal
+        if len(self._crystal_atoms) > 1:
+            for phase_idx in sorted(self._crystal_atoms):
+                atoms = self._crystal_atoms[phase_idx]
+                path = self._output_path(f".{phase_idx}.crystal")
+                if path is None:
+                    return
+                self._write_crystal_file(path, name, atoms)
+            folder = self.central.out_folder_edit.text()
+            self.statusBar().showMessage(
+                f"Saved {len(self._crystal_atoms)} crystal phases to {folder}", 8000,
+            )
+            return
+
+        # Single-phase: {name}.crystal
         path = self._output_path(".crystal")
         if path is None:
             return
+        atoms = next(iter(self._crystal_atoms.values()))
+        self._write_crystal_file(path, name, atoms)
+        folder = self.central.out_folder_edit.text()
+        self.statusBar().showMessage(
+            f"Saved {name}.crystal to {folder}", 8000,
+        )
 
-        name = self.central.out_name_edit.text().strip()
-
-        atoms = self._crystal_atoms
+    def _write_crystal_file(self, path: str, name: str, atoms) -> None:
+        """Write a single .crystal file."""
         positions = atoms.get_positions()
         symbols = atoms.get_chemical_symbols()
-        cell = atoms.get_cell()  # 3×3 row-major
-        # Determine crystal system for the header
+        cell = atoms.get_cell()
         from orientation import symmetry_from_atoms
         crys_sys = (symmetry_from_atoms(atoms)
                     or self._crystal_system
-                    or _crystal_system_from_gui(self.settings_dock))
+                    or self._crystal_system_from_gui())
         header = (f"# POLY crystal: {name}  |  "
                   f"{len(atoms)} atoms  |  "
                   f"formula={atoms.get_chemical_formula()}\n"
@@ -1625,11 +2015,6 @@ class MainWindow(QMainWindow):
             lines.append(f"{sym:>3s}  {x:.8f}  {y:.8f}  {z:.8f}")
         with open(path, "w") as fh:
             fh.write("\n".join(lines))
-
-        folder = self.central.out_folder_edit.text()
-        self.statusBar().showMessage(
-            f"Saved {name}.crystal to {folder}", 8000,
-        )
 
     def _output_path(self, ext: str) -> str | None:
         """Build ``folder/name.ext``; returns None and shows message if folder
@@ -1691,6 +2076,9 @@ class MainWindow(QMainWindow):
             orientation_result=self._orientation_result,
             crystal_source=self._crystal_source,
             crystal_params=self._crystal_params,
+            crystal_atoms=self._crystal_atoms,
+            grain_phases=self._grain_phases,
+            phase_configs=self._phase_configs,
             data_path=data_path,
             dump_path=dump_path,
             hkl=hkl,

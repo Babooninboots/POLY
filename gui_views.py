@@ -166,6 +166,8 @@ class GlobalSettingsDock(QDockWidget):
     """Dockable panel holding all global simulation inputs."""
 
     edit_apply_clicked = Signal()
+    phase_changed = Signal(int)
+    add_crystal_clicked = Signal()
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__("Global Settings (double-click to detach/attach)", parent)
@@ -525,13 +527,81 @@ class GlobalSettingsDock(QDockWidget):
         else:
             self.dist_stddev.setValue(20.0)
 
+    def _on_phase_assign_mode_changed(self, idx: int) -> None:
+        """Switch between fraction spinbox (idx=0) and grain list edit (idx=1)."""
+        self.phase_fraction_spin.setVisible(idx == 0)
+        self.phase_grain_list_edit.setVisible(idx == 1)
+
     # ------------------------------------------------------------------
     # 4. Crystal Structure
     # ------------------------------------------------------------------
 
     def _build_crystal_group(self) -> None:
         group = QGroupBox("Crystal Structure")
-        form = QFormLayout(group)
+        outer = QVBoxLayout(group)
+
+        # ---- Phase Index + ADD CRYSTAL header row ----
+        phase_row = QHBoxLayout()
+        phase_row.addWidget(QLabel("Phase:"))
+        self.phase_index_spin = QSpinBox()
+        self.phase_index_spin.setRange(0, 0)
+        self.phase_index_spin.setValue(0)
+        self.phase_index_spin.setPrefix("Phase ")
+        self.phase_index_spin.valueChanged.connect(self.phase_changed.emit)
+        phase_row.addWidget(self.phase_index_spin)
+        phase_row.addStretch()
+        self.add_crystal_btn = QPushButton("ADD CRYSTAL")
+        self.add_crystal_btn.setStyleSheet(
+            "QPushButton { background-color: #2E7D32; color: white; font-weight: bold; "
+            "border: none; border-radius: 3px; padding: 3px 10px; }"
+            "QPushButton:hover { background-color: #388E3C; }"
+        )
+        self.add_crystal_btn.clicked.connect(self.add_crystal_clicked.emit)
+        phase_row.addWidget(self.add_crystal_btn)
+        outer.addLayout(phase_row)
+
+        # ---- Phase assignment row (hidden for phase 0) ----
+        self.phase_assign_stack = DynamicStackedWidget()
+        assign_hidden = QWidget()
+        assign_widget = QWidget()
+        assign_layout = QHBoxLayout(assign_widget)
+        assign_layout.setContentsMargins(0, 0, 0, 0)
+        assign_layout.setSpacing(4)
+        assign_layout.addWidget(QLabel("Assign:"))
+        self.phase_assign_mode = QComboBox()
+        self.phase_assign_mode.addItems(["Fraction", "Grain List"])
+        self.phase_assign_mode.currentIndexChanged.connect(
+            self._on_phase_assign_mode_changed
+        )
+        assign_layout.addWidget(self.phase_assign_mode)
+        self.phase_fraction_spin = QDoubleSpinBox()
+        self.phase_fraction_spin.setRange(0.0, 1.0)
+        self.phase_fraction_spin.setDecimals(2)
+        self.phase_fraction_spin.setSingleStep(0.05)
+        self.phase_fraction_spin.setValue(0.0)
+        assign_layout.addWidget(self.phase_fraction_spin)
+        self.phase_grain_list_edit = QLineEdit()
+        self.phase_grain_list_edit.setPlaceholderText("e.g. 1,3,5-8, 2n, d<20")
+        self.phase_grain_list_edit.setToolTip(
+            "Grain ID formulas:\n"
+            "  1,3,5-8  — explicit IDs and ranges\n"
+            "  2n       — all even-index grains (0,2,4,…)\n"
+            "  2n+1     — all odd-index grains (1,3,5,…)\n"
+            "  d < 20   — grains with diameter < 20\n"
+            "  d > 50   — grains with diameter > 50\n"
+            "Combine with commas: 2n, 5, d<30"
+        )
+        self.phase_grain_list_edit.setVisible(False)
+        assign_layout.addWidget(self.phase_grain_list_edit)
+        assign_layout.addStretch()
+        self.phase_assign_stack.addWidget(assign_hidden)  # index 0 = hidden
+        self.phase_assign_stack.addWidget(assign_widget)  # index 1 = visible
+        self.phase_assign_stack.setCurrentIndex(0)
+        outer.addWidget(self.phase_assign_stack)
+
+        # ---- Existing crystal form ----
+        form = QFormLayout()
+        outer.addLayout(form)
 
         self.crystal_combo = QComboBox()
         self.crystal_combo.addItems(
