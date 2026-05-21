@@ -2060,6 +2060,9 @@ class MainWindow(QMainWindow):
             "Building full polycrystal (this may take a while)…",
         )
 
+        # Flush any unsaved phase config edits before building
+        self._save_current_phase_config()
+
         dock = self.settings_dock
         hkl_text = dock.ori_hkl_edit.text().strip()
         try:
@@ -2070,6 +2073,15 @@ class MainWindow(QMainWindow):
             hkl = None
 
         distribution = self._seed_result.distribution
+
+        # Recompute grain_phases from current phase_configs in case they
+        # changed since the last seed generation (e.g. fraction edits).
+        if len(self._phase_configs) > 1 and self._seed_result is not None:
+            self._grain_phases = assign_grain_phases(
+                self._seed_result.n_grains,
+                self._phase_configs,
+                diameters=self._seed_result.diameters,
+            )
 
         self._build_worker = PolycrystalBuildWorker(
             seed_result=self._seed_result,
