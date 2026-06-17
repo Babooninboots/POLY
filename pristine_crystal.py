@@ -334,18 +334,31 @@ class PristineCrystal:
                 pbc=True,
             )
         else:
-            atoms = ase_bulk(
-                symbol,
-                crystalstructure=crystalstructure,
-                a=a,
-                b=b,
-                c=c,
-                covera=covera,
-                u=u,
-                alpha=alpha,
-                orthorhombic=orthorhombic,
-                cubic=_cubic,
-            )
+            try:
+                atoms = ase_bulk(
+                    symbol,
+                    crystalstructure=crystalstructure,
+                    a=a,
+                    b=b,
+                    c=c,
+                    covera=covera,
+                    u=u,
+                    alpha=alpha,
+                    orthorhombic=orthorhombic,
+                    cubic=_cubic,
+                )
+            except Exception:
+                # ASE failed (likely a custom element name like "1").
+                # Fall back to building with a placeholder element ('H')
+                # and storing the custom name in atoms.info.
+                atoms = ase_bulk(
+                    "H",  # placeholder — same geometry, custom name below
+                    crystalstructure=crystalstructure,
+                    a=a, b=b, c=c,
+                    covera=covera, u=u, alpha=alpha,
+                    orthorhombic=orthorhombic, cubic=_cubic,
+                )
+                atoms.info["_custom_element"] = symbol
         return cls(atoms, box_start=box_start, box_end=box_end, coverage=coverage)
 
     # ------------------------------------------------------------------

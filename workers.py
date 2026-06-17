@@ -81,12 +81,23 @@ def _load_crystal_file(path: str):
         np.dot(cell[0], cell[1]) / (a * b + 1e-30)
     )))
 
-    atoms = Atoms(
-        symbols=symbols_list,
-        positions=np.array(positions_list),
-        cell=cell,
-        pbc=True,
-    )
+    # Handle custom element names (e.g. "1") that ASE doesn't recognise
+    from ase.data import atomic_numbers as _ase_atomic_numbers
+    _has_custom = any(s not in _ase_atomic_numbers for s in symbols_list)
+    if _has_custom:
+        _unique_custom = list(dict.fromkeys(symbols_list))  # preserve order
+        atoms = Atoms(
+            numbers=[0] * len(positions_list),
+            positions=np.array(positions_list),
+            cell=cell, pbc=True,
+        )
+        atoms.info["_custom_element"] = _unique_custom[0] if len(_unique_custom) == 1 else ",".join(_unique_custom)
+    else:
+        atoms = Atoms(
+            symbols=symbols_list,
+            positions=np.array(positions_list),
+            cell=cell, pbc=True,
+        )
     atoms.info["_cell_params"] = dict(
         a=a, b=b, c=c_val, alpha=alpha, beta=beta, gamma=gamma,
     )

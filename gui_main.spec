@@ -195,7 +195,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name="POLY_v1.5",
+    name="POLY_v1.6",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

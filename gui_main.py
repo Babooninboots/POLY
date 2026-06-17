@@ -1130,7 +1130,9 @@ class MainWindow(QMainWindow):
         plotter.clear()
 
         positions = atoms.get_positions()
-        symbols = atoms.get_chemical_symbols()
+        _raw_syms = atoms.get_chemical_symbols()
+        _custom = getattr(atoms, "info", {}).get("_custom_element")
+        symbols = [_custom] * len(_raw_syms) if _custom else list(_raw_syms)
 
         # group atoms by element, render each as one PolyData
         unique_syms = sorted(set(symbols), key=symbols.index)
@@ -1996,7 +1998,9 @@ class MainWindow(QMainWindow):
     def _write_crystal_file(self, path: str, name: str, atoms) -> None:
         """Write a single .crystal file."""
         positions = atoms.get_positions()
-        symbols = atoms.get_chemical_symbols()
+        _raw_syms = atoms.get_chemical_symbols()
+        _custom = getattr(atoms, "info", {}).get("_custom_element")
+        symbols = [_custom] * len(_raw_syms) if _custom else list(_raw_syms)
         cell = atoms.get_cell()
         from orientation import symmetry_from_atoms
         crys_sys = (symmetry_from_atoms(atoms)

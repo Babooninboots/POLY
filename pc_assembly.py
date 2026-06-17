@@ -243,7 +243,7 @@ class PolycrystalAssembly:
             self.crystal = crystal_atoms.get(0)
             info0 = self._phase_info[0]
             self._crystal_positions = info0.positions
-            self._crystal_symbols = info0.symbols
+            self._crystal_symbols = info0.symbols  # already patched in _build_phase_info
             self._type_to_symbol = info0.type_to_symbol
             self._type_masses = info0.type_masses
             self._crystal_types = info0.types
@@ -253,7 +253,12 @@ class PolycrystalAssembly:
             self._grain_phases = None
             self.crystal = crystal_atoms
             self._crystal_positions = self.crystal.get_positions()
-            self._crystal_symbols = np.array(self.crystal.get_chemical_symbols())
+            _raw_symbols = self.crystal.get_chemical_symbols()
+            _custom = getattr(self.crystal, "info", {}).get("_custom_element")
+            if _custom:
+                self._crystal_symbols = np.array([_custom] * len(_raw_symbols))
+            else:
+                self._crystal_symbols = np.array(_raw_symbols)
 
             unique = sorted(set(self._crystal_symbols))
             self._symbol_to_type = {sym: i + 1 for i, sym in enumerate(unique)}
@@ -274,7 +279,9 @@ class PolycrystalAssembly:
         self._phase_info: dict[int, PhaseCrystalInfo] = {}
         for phase_idx, atoms in crystal_atoms.items():
             positions = atoms.get_positions()
-            symbols = np.array(atoms.get_chemical_symbols())
+            _raw = atoms.get_chemical_symbols()
+            _custom = getattr(atoms, "info", {}).get("_custom_element")
+            symbols = np.array([_custom] * len(_raw) if _custom else list(_raw))
             unique = sorted(set(symbols))
             symbol_to_type = {sym: i + 1 for i, sym in enumerate(unique)}
             type_to_symbol = {i + 1: sym for i, sym in enumerate(unique)}
@@ -779,7 +786,7 @@ class PolycrystalAssembly:
         n = len(positions)
         ids = np.arange(start_id, start_id + n, dtype=int)
         buf = io.StringIO()
-        buf.write("Atoms\n")
+        buf.write("Atoms\n\n")
         np.savetxt(buf, np.column_stack([ids, types, positions]),
                    fmt=["%d", "%d", "%.8f", "%.8f", "%.8f"])
         buf.write("\n")
