@@ -53,6 +53,7 @@ crystallographic orientations.
   - [8. Save Intermediate State (Optional)](#8-save-intermediate-state-optional)
   - [9. Configure Output](#9-configure-output)
   - [10. Build the Polycrystal](#10-build-the-polycrystal)
+- [Convert Crystal / LAMMPS Data](#convert-crystal-lammps-data)
 
 
 ## Getting Started
@@ -209,3 +210,27 @@ Click **Proceed with Build**. A background thread:
   (per-atom grain_id + Euler angles).
 
 The status bar shows the final atom and grain counts.
+
+---
+
+## Convert Crystal / LAMMPS Data
+
+`convert_crystal.py` converts between POLY `.crystal` files and LAMMPS `.data`
+files in both directions.
+
+**`.crystal` → `.data`**: reads element symbols and positions from a `.crystal`
+file, writes a LAMMPS data file with atomic masses and the `Atoms` section.
+Custom element names (e.g. `"1"`) are supported — unknown elements get a default
+mass of 1.0 g/mol.
+
+**`.data` → `.crystal`**: reads a LAMMPS data file (atomic style), guesses
+element symbols from masses in the `Masses` section, and writes a `.crystal`
+file with the `# crystal_system:` header.
+
+**Usage:**
+```bash
+python convert_crystal.py input.crystal -o output.data
+python convert_crystal.py input.data -o output.crystal --crystal_system cubic
+```
+
+If `-o` is omitted, the output file is auto-named by replacing the extension.

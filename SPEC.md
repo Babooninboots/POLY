@@ -321,6 +321,7 @@ final polycrystal.
 | `workers.py`          | Background QThread workers bridging the GUI to backend modules                     |
 | `user_manual.md`      | Comprehensive user guide                                                           |
 | `gui_main.spec`       | PyInstaller spec for standalone Windows executable                                 |
+| `convert_crystal.py`  | CLI tool to convert between `.crystal` and LAMMPS `.data` files                   |
 | `examples/`           | Runnable scripts: `bicrystal.py`, `NaCl.py`                                        |
 | `tests/`              | Test suites for all modules                                                        |
 
