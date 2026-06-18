@@ -39,6 +39,7 @@ crystallographic orientations.
 
 - [Overview](#overview)
 - [Getting Started](#getting-started)
+  - [Dependencies](#dependencies)
   - [Launch](#launch)
   - [Window Layout](#window-layout)
   - [Action Buttons (bottom bar, left to right)](#action-buttons-bottom-bar-left-to-right)
@@ -57,6 +58,24 @@ crystallographic orientations.
 
 
 ## Getting Started
+
+### Dependencies
+
+Install the required Python packages:
+
+```bash
+pip install numpy scipy PySide6 pyvista pyvistaqt pyqtgraph pyvoro2 vtk ase
+```
+
+| Library | Role |
+|---|---|
+| NumPy, SciPy | Array operations, KD-tree, rotations |
+| PySide6 | Qt6 GUI framework |
+| PyVista / pyvistaqt | 3D visualisation |
+| pyvoro2 | Periodic Voronoi tessellation |
+| pyqtgraph | Histogram charts |
+| vtk | GPU rendering |
+| ASE | Crystal structures, atomic masses |
 
 ### Launch
 
@@ -186,6 +205,8 @@ charts update with grain-size and misorientation distributions.
 - **Slice the view** by dragging the Slice Depth slider or cycling the View
   button (Isometric → X → Y → Z).
 - **Adjust perspective** with the Perspective slider.
+- **Right-click** the grain-size or misorientation chart to export the plot
+  as an image (PNG/SVG) or CSV data via the context menu.
 
 ### 8. Save Intermediate State (Optional)
 

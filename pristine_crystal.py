@@ -626,22 +626,42 @@ class PristineCrystal:
                 for i in range(3)
             ], dtype=int)
 
-        # Apply margin
+        # Apply margin; force odd counts so a unit cell sits exactly at
+        # the origin when tiling symmetrically from -n//2 to +n//2.
         n = tuple((n_est + margin).tolist())
+        n = tuple(n_i + 1 if n_i % 2 == 1 else n_i for n_i in n)
 
-        # ---- iterative refinement (rare) -------------------------------
-        for _ in range(20):  # safety cap
-            self.atoms = self.unit_cell.repeat(n)
-            pos = self.atoms.get_positions()
-            extent = pos.max(axis=0) - pos.min(axis=0)
+        # ---- symmetric tiling (vectorised) ------------------------------
+        uc_pos = self.unit_cell.get_positions()
+        uc_sym = list(self.unit_cell.get_chemical_symbols())
+        n_uc = len(uc_pos)
+
+        for _ in range(20):
+            # Build all integer offsets from -n_j//2 to +n_j//2
+            i_vals = np.arange(-n[0] // 2, n[0] // 2 + 1)
+            j_vals = np.arange(-n[1] // 2, n[1] // 2 + 1)
+            k_vals = np.arange(-n[2] // 2, n[2] // 2 + 1)
+            I, J, K = np.meshgrid(i_vals, j_vals, k_vals, indexing="ij")
+            shifts = (I.ravel()[:, None] * cell[0]
+                      + J.ravel()[:, None] * cell[1]
+                      + K.ravel()[:, None] * cell[2])  # (N_shifts, 3)
+
+            all_pos = (uc_pos[None, :, :] + shifts[:, None, :])
+            all_pos = all_pos.reshape(-1, 3)
+            all_sym = uc_sym * len(shifts)
+
+            self.atoms = Atoms(
+                symbols=all_sym, positions=all_pos,
+                cell=self.unit_cell.get_cell(), pbc=True,
+            )
+
+            extent = all_pos.max(axis=0) - all_pos.min(axis=0)
             shortfall = target - extent
             if np.all(shortfall <= 0):
                 break
             worst_dim = int(np.argmax(shortfall))
-            contrib = np.abs(cell[:, worst_dim])  # per-lattice-vec contribution
-            best_lat = int(np.argmax(contrib))
             n_list = list(n)
-            n_list[best_lat] += 1
+            n_list[worst_dim] += 2  # symmetric increment
             n = tuple(n_list)
 
         self.repeats = n

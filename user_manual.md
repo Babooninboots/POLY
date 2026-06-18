@@ -61,6 +61,7 @@ crystallographic orientations.
   - [`.data` — LAMMPS atomic data](#data-lammps-atomic-data)
   - [`.dump` — LAMMPS dump](#dump-lammps-dump)
 - [Keyboard & Mouse](#keyboard-mouse)
+  - [Chart Controls (right-click on histogram)](#chart-controls-right-click-on-histogram)
 - [Tips](#tips)
 - [Algorithms](#algorithms)
   - [Seed Distribution Optimization](#seed-distribution-optimization)
@@ -353,6 +354,17 @@ Grain IDs are 1-based.
 | **Scroll (viewport)**                   | Zoom                                             |
 | **Slice Depth slider**                  | GPU clipping plane through Voronoi polyhedra     |
 | **View button**                         | Cycle Isometric → X-normal → Y-normal → Z-normal |
+
+### Chart Controls (right-click on histogram)
+
+| Action | Result |
+| --- | --- |
+| **Export…** | Save plot as image (PNG, SVG, PDF, EPS) with custom resolution |
+| **Export CSV…** | Export histogram bin data as comma-separated values |
+| **View All** / **Auto Range** | Toggle between full pan/zoom and auto-fit view |
+| **Mouse Mode** | Switch between 1-button and 3-button mouse interaction |
+| **Plot Options…** | Configure axis labels, grid, legend, and display settings |
+| **Copy** | Copy the plot image to clipboard |
 
 ---
 

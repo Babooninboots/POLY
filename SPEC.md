@@ -205,6 +205,9 @@ Returns an `OrientationResult` dataclass: `euler_angles` (N×3, degrees),
    - **Stop** requests early termination of the MC optimizer.
    - **Slice Depth** slider provides GPU-accelerated clipping through the
      polycrystal.
+   - **Right-click** on the grain-size or misorientation histogram chart opens
+     a pyqtgraph context menu: **Export…** saves the plot as PNG, SVG, or PDF;
+     **Export CSV…** saves the histogram data; **View All** enables pan/zoom.
 
 4. **Background Workers** (`workers.py`)
    
