@@ -1172,33 +1172,48 @@ class CentralWidget(QWidget):
                 size_counts, size_bins = np.array([]), np.array([0, 1])
 
         if len(size_counts) > 0:
+            self.grain_size_plot.setLabel("bottom", "Equivalent Diameter (Å)")
+            self.grain_size_plot.setLabel("left", "Count")
+
+            # --- Grain Size target PDF line (behind bars) ---
+            _x_vals = np.linspace(size_bins[0], size_bins[-1], 200)
+            _has_target = (target_size_params is not None
+                           and len(diameters) > 1
+                           and np.ptp(diameters) >= 1e-5)
+            if _has_target:
+                _type = target_size_params.get("type", "normal")
+                if _type == "bimodal":
+                    frac = target_size_params["frac"]
+                    m1, s1 = target_size_params["m1"], target_size_params["s1"]
+                    m2, s2 = target_size_params["m2"], target_size_params["s2"]
+                    _pdf_vals = (frac * scipy_norm.pdf(_x_vals, loc=m1, scale=s1)
+                                 + (1 - frac) * scipy_norm.pdf(_x_vals, loc=m2, scale=s2))
+                else:
+                    mean = target_size_params["mean"]
+                    std = target_size_params["std"]
+                    _pdf_vals = scipy_norm.pdf(_x_vals, loc=mean, scale=std)
+                _pdf_vals = _pdf_vals * len(diameters) * (size_bins[1] - size_bins[0])
+                self.grain_size_plot.plot(
+                    _x_vals, _pdf_vals,
+                    pen=pg.mkPen(color="y", width=3),
+                    name="target_pdf",
+                )
+
+            # --- Data carrier for bar chart (invisible, exportable) ---
+            _centers = (size_bins[:-1] + size_bins[1:]) / 2.0
+            self.grain_size_plot.plot(
+                _centers, size_counts.astype(float),
+                pen=None, symbol=None,
+                name="histogram_counts",
+            )
+
+            # Bar chart (rendered on top)
             self.grain_size_plot.addItem(
                 pg.BarGraphItem(
                     x0=size_bins[:-1], x1=size_bins[1:], height=size_counts,
                     brush=(52, 152, 219, 180),
                 )
             )
-            self.grain_size_plot.setLabel("bottom", "Equivalent Diameter (Å)")
-            self.grain_size_plot.setLabel("left", "Count")
-
-            # --- Grain Size target curve ---
-            if target_size_params is not None and len(diameters) > 1 and np.ptp(diameters) >= 1e-5:
-                x_vals = np.linspace(size_bins[0], size_bins[-1], 200)
-                _type = target_size_params.get("type", "normal")
-                if _type == "bimodal":
-                    frac = target_size_params["frac"]
-                    m1, s1 = target_size_params["m1"], target_size_params["s1"]
-                    m2, s2 = target_size_params["m2"], target_size_params["s2"]
-                    pdf_vals = (frac * scipy_norm.pdf(x_vals, loc=m1, scale=s1)
-                                + (1 - frac) * scipy_norm.pdf(x_vals, loc=m2, scale=s2))
-                else:
-                    mean = target_size_params["mean"]
-                    std = target_size_params["std"]
-                    pdf_vals = scipy_norm.pdf(x_vals, loc=mean, scale=std)
-                y_vals = pdf_vals * len(diameters) * (size_bins[1] - size_bins[0])
-                self.grain_size_plot.plot(
-                    x_vals, y_vals, pen=pg.mkPen(color="y", width=3),
-                )
 
         # --- Misorientation Distribution ---
         self.misorientation_plot.clear()
