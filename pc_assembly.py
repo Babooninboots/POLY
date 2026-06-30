@@ -409,7 +409,8 @@ class PolycrystalAssembly:
         all_gid: list[np.ndarray] = []
         all_eul: list[np.ndarray] = []
 
-        if (self.is_columnar and self.hkl is not None
+        if (self.is_columnar and not self._is_multiphase
+                and self.hkl is not None
                 and self.grain_diagonals is not None
                 and self._max_grain_z is not None):
             # ============================================================
