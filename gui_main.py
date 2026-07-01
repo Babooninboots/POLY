@@ -339,7 +339,7 @@ class MainWindow(QMainWindow):
             self._on_apply_edit_clicked
         )
         self.settings_dock.edit_grain_id.valueChanged.connect(
-            self._on_grain_id_changed
+            lambda v: self._on_grain_id_changed(v - 1)  # spinbox is 1-based → 0-based
         )
         # Auto-tune box dimensions when distribution / crystal / orientation change
         dock = self.settings_dock
@@ -832,8 +832,8 @@ class MainWindow(QMainWindow):
         # configure editor spinbox
         dock = self.settings_dock
         dock.edit_grain_id.blockSignals(True)
-        dock.edit_grain_id.setRange(-1, seed_result.n_grains - 1)
-        dock.edit_grain_id.setValue(-1)
+        dock.edit_grain_id.setRange(0, seed_result.n_grains)  # 0 = "--", 1..N = grains
+        dock.edit_grain_id.setValue(0)
         dock.edit_grain_id.setEnabled(True)
         dock.edit_grain_id.blockSignals(False)
         self.central.save_state_btn.setEnabled(True)
@@ -1293,7 +1293,7 @@ class MainWindow(QMainWindow):
         dock.edit_grain_diam.blockSignals(True)
         dock.edit_grain_radius.blockSignals(True)
 
-        dock.edit_grain_id.setValue(grain_id)
+        dock.edit_grain_id.setValue(grain_id + 1)  # display as 1-based
         dock.edit_x.setValue(cached["x"] if cached and "x" in cached else float(seeds[grain_id, 0]))
         dock.edit_y.setValue(cached["y"] if cached and "y" in cached else float(seeds[grain_id, 1]))
         dock.edit_z.setValue(cached["z"] if cached and "z" in cached else float(seeds[grain_id, 2]))

@@ -799,7 +799,7 @@ class GlobalSettingsDock(QDockWidget):
 
         id_diam_row = QHBoxLayout()
         self.edit_grain_id = QSpinBox()
-        self.edit_grain_id.setRange(-1, -1)
+        self.edit_grain_id.setRange(0, 0)
         self.edit_grain_id.setSpecialValueText("--")
         self.edit_grain_id.setEnabled(False)
         id_diam_row.addWidget(self.edit_grain_id)
