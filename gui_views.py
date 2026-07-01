@@ -583,10 +583,10 @@ class GlobalSettingsDock(QDockWidget):
         self.phase_grain_list_edit = QLineEdit()
         self.phase_grain_list_edit.setPlaceholderText("e.g. 1,3,5-8, 2n, d<20")
         self.phase_grain_list_edit.setToolTip(
-            "Grain ID formulas:\n"
+            "Grain ID formulas (1-based IDs):\n"
             "  1,3,5-8  — explicit IDs and ranges\n"
-            "  2n       — all even-index grains (0,2,4,…)\n"
-            "  2n+1     — all odd-index grains (1,3,5,…)\n"
+            "  2n       — all even grains (grain 1,3,5,…)\n"
+            "  2n+1     — all odd grains (grain 2,4,6,…)\n"
             "  d < 20   — grains with diameter < 20\n"
             "  d > 50   — grains with diameter > 50\n"
             "Combine with commas: 2n, 5, d<30"

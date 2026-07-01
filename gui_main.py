@@ -203,14 +203,15 @@ def parse_grain_list(
                 result.extend(int(i) for i, m in enumerate(mask) if m)
             continue
 
-        # Standard: single ID or range
+        # Standard: single ID or range (1-based user input → 0-based)
         if "-" in part:
             lo_str, hi_str = part.split("-", 1)
-            lo, hi = int(lo_str.strip()), int(hi_str.strip())
+            lo = int(lo_str.strip()) - 1
+            hi = int(hi_str.strip()) - 1
             result.extend(range(lo, hi + 1))
         else:
             try:
-                result.append(int(part))
+                result.append(int(part) - 1)
             except ValueError:
                 pass  # skip unrecognized tokens
 
