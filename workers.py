@@ -246,7 +246,7 @@ class SeedGenerationWorker(QThread):
                 elif self._orientation_mode == "custom_profile" and self._ori_custom_file:
                     data = np.loadtxt(self._ori_custom_file)
                     euler_map = {
-                        int(row[0]): (float(row[1]), float(row[2]), float(row[3]))
+                        int(row[0]) - 1: (float(row[1]), float(row[2]), float(row[3]))
                         for row in data
                     }
                     ori_kwargs["euler_map"] = euler_map

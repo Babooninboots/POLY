@@ -2163,7 +2163,7 @@ class MainWindow(QMainWindow):
         # .euler — N×4 [grain_id, phi1, Phi, phi2] (compatible with Custom Profile)
         eulers = self._orientation_result.euler_angles
         ids = np.arange(eulers.shape[0], dtype=int).reshape(-1, 1)
-        euler_with_id = np.hstack([ids, eulers])
+        euler_with_id = np.hstack([ids + 1, eulers])  # 1-based grain IDs
         np.savetxt(euler_path, euler_with_id, fmt=["%d", "%.6f", "%.6f", "%.6f"],
                    header=f"POLY orientation state: {name}  |  "
                           f"mode={self._orientation_result.mode}  |  "
